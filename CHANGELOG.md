@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.4.0
+
+### Added
+- **Kubernetes Manifest Metadata Extractor (`serde-saphyr` + `rayon`):** Added concurrent YAML parsing during repository indexing to extract `kind`, `metadata.name`, `metadata.namespace`, and `metadata.labels` into validated `nutype` domain types (`K8sKind`, `K8sName`, `K8sNamespace`).
+- **Structured Query Filtering:** Indexed extracted Kubernetes fields in Tantivy so queries support field-prefixed filters (`kind:Deployment`, `ns:monitoring`, `name:api`, `labels:app=web`) alongside free-text search.
+- **Resource Badges in Terminal & JSON Output:** Attached optional `K8sMetadata` to `SearchHit` and rendered `[Kind/name @ namespace]` badges in terminal headers.
+
 ## 0.3.0
 
 ### Added

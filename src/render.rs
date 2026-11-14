@@ -45,8 +45,20 @@ impl TerminalRenderer {
 
         for (idx, hit) in hits.iter().enumerate() {
             let rank = idx + 1;
+
+            let k8s_badge = match &hit.k8s {
+                Some(k8s) => {
+                    let name = k8s.name.as_deref().map(String::as_str).unwrap_or("<unnamed>");
+                    match &k8s.namespace {
+                        Some(ns) => format!(" \x1b[1;33m[{}/{name} @ {ns}]\x1b[0m", k8s.kind),
+                        None => format!(" \x1b[1;33m[{}/{name}]\x1b[0m", k8s.kind),
+                    }
+                }
+                None => String::new(),
+            };
+
             out.push_str(&format!(
-                "\x1b[1;36m[{rank}] {path}\x1b[0m \x1b[2m(score: {score:.2})\x1b[0m\n",
+                "\x1b[1;36m[{rank}] {path}\x1b[0m{k8s_badge} \x1b[2m(score: {score:.2})\x1b[0m\n",
                 path = hit.path,
                 score = hit.score
             ));

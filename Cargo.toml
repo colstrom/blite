@@ -1,6 +1,6 @@
 [package]
 name = "blite"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 license = "MIT OR Apache-2.0"
@@ -19,8 +19,10 @@ fs-err = "3.3.2"
 ignore = "0.4.34"
 miette = { version = "7.6.0", features = ["fancy"] }
 nutype = { version = "0.8.0", features = ["serde"] }
+rayon = "1.12.0"
 rustyline = "19.0.0"
 serde = { version = "1.0.229", features = ["derive"] }
+serde-saphyr = { version = "2.1.1", features = ["miette"] }
 serde_json = "1.0.154"
 syntect = { version = "5.3.0", features = ["default-fancy"] }
 tantivy = "0.27.0"

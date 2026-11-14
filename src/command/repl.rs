@@ -166,7 +166,7 @@ fn print_help() {
     eprintln!(
         "\
 Commands:
-  <query>       Search manifests, scripts, and code (supports AND, OR, \"phrases\", path:foo)
+  <query>       Search manifests & code (supports kind:Deployment, ns:prod, name:api, labels:app=web)
   :limit <N>    Set max results shown per query
   :reload       Re-index the repository from disk
   :help         Show this help message
