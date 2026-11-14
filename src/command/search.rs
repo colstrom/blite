@@ -4,6 +4,7 @@ use bon::Builder;
 use camino::Utf8PathBuf;
 use clap::Args;
 use miette::Diagnostic;
+use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -24,35 +25,41 @@ pub enum SearchError {
 
 #[derive(Debug, Clone, Args, Builder)]
 pub struct SearchCommand {
+    /// Query string to search across repository manifests and code
     pub query: SearchQuery,
 
+    /// Path to the target repository root
     #[arg(short, long, default_value = ".")]
     #[builder(default = Utf8PathBuf::from("."))]
     pub repo: Utf8PathBuf,
 
+    /// Maximum number of matching documents to return
     #[arg(short = 'n', long, default_value_t = 10)]
     #[builder(default = 10)]
     pub limit: usize,
 }
 
-#[derive(Serialize)]
-struct SearchPayload {
-    query: SearchQuery,
-    total_hits: usize,
-    hits: Vec<SearchHit>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchPayload {
+    pub query: SearchQuery,
+    pub total_hits: usize,
+    pub hits: Vec<SearchHit>,
 }
 
 impl SearchCommand {
-    pub fn run(self) -> Result<serde_json::Value, SearchError> {
+    pub fn execute(&self) -> Result<SearchPayload, SearchError> {
         let index = RepoIndex::build_from_dir(&self.repo)?;
         let hits = index.search(&self.query, self.limit)?;
 
-        let payload = SearchPayload {
-            query: self.query,
+        Ok(SearchPayload {
+            query: self.query.clone(),
             total_hits: hits.len(),
             hits,
-        };
+        })
+    }
 
+    pub fn run(self) -> Result<serde_json::Value, SearchError> {
+        let payload = self.execute()?;
         Ok(serde_json::to_value(payload)?)
     }
 }

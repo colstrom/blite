@@ -7,6 +7,7 @@ use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use ignore::WalkBuilder;
 use miette::Diagnostic;
+use serde::Deserialize;
 use serde::Serialize;
 use tantivy::Index;
 use tantivy::ReloadPolicy;
@@ -40,8 +41,8 @@ pub enum IndexError {
     QueryParse(#[from] tantivy::query::QueryParserError),
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct SearchHit {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
     pub path: RepoRelativePath,
     pub score: f32,
     pub content: String,

@@ -3,6 +3,7 @@
 pub mod command;
 pub mod error;
 pub mod index;
+pub mod render;
 pub mod types;
 
 pub use command::Command;

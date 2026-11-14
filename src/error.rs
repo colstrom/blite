@@ -1,3 +1,5 @@
+// src/error.rs
+
 use miette::Diagnostic;
 use thiserror::Error;
 
@@ -9,6 +11,9 @@ pub enum Error {
 
     #[diagnostic(transparent)]
     Index(#[from] crate::index::IndexError),
+
+    #[diagnostic(transparent)]
+    Render(#[from] crate::render::RenderError),
 
     #[diagnostic(code(blite::io))]
     Io(#[from] std::io::Error),
