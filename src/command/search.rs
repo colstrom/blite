@@ -1,5 +1,3 @@
-// src/command/search.rs
-
 use bon::Builder;
 use camino::Utf8PathBuf;
 use clap::Args;
@@ -8,6 +6,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::drift::KitchenComparator;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
 use crate::index::SearchHit;
@@ -33,6 +32,10 @@ pub struct SearchCommand {
     #[builder(default = Utf8PathBuf::from("."))]
     pub repo: Utf8PathBuf,
 
+    /// Optional path to the kitchen repository for drift comparison
+    #[arg(skip)]
+    pub kitchen: Option<Utf8PathBuf>,
+
     /// Maximum number of matching documents to return
     #[arg(short = 'n', long, default_value_t = 10)]
     #[builder(default = 10)]
@@ -49,7 +52,14 @@ pub struct SearchPayload {
 impl SearchCommand {
     pub fn execute(&self) -> Result<SearchPayload, SearchError> {
         let index = RepoIndex::build_from_dir(&self.repo)?;
-        let hits = index.search(&self.query, self.limit)?;
+        let mut hits = index.search(&self.query, self.limit)?;
+
+        if let Some(kitchen_root) = &self.kitchen {
+            let comparator = KitchenComparator::new(&self.repo, kitchen_root);
+            for hit in &mut hits {
+                hit.drift = Some(comparator.compare(&hit.path));
+            }
+        }
 
         Ok(SearchPayload {
             query: self.query.clone(),

@@ -10,6 +10,7 @@ use thiserror::Error;
 use tracing::debug;
 use tracing::info;
 
+use crate::drift::KitchenComparator;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
 use crate::render::RenderError;
@@ -37,6 +38,10 @@ pub struct ReplCommand {
     #[builder(default = Utf8PathBuf::from("."))]
     pub repo: Utf8PathBuf,
 
+    /// Optional path to the kitchen repository for drift comparison
+    #[arg(skip)]
+    pub kitchen: Option<Utf8PathBuf>,
+
     /// Maximum number of matching documents to return per query
     #[arg(short = 'n', long, default_value_t = 5)]
     #[builder(default = 5)]
@@ -57,6 +62,7 @@ impl ReplCommand {
         let start = Instant::now();
         let mut index = RepoIndex::build_from_dir(&self.repo)?;
         let renderer = TerminalRenderer::new();
+        let comparator = self.kitchen.as_ref().map(|k| KitchenComparator::new(&self.repo, k));
         let mut limit = self.limit;
 
         eprintln!(
@@ -100,7 +106,13 @@ impl ReplCommand {
                         ReplAction::Search(query) => {
                             let query_start = Instant::now();
                             match index.search(&query, limit) {
-                                Ok(hits) => {
+                                Ok(mut hits) => {
+                                    if let Some(comp) = &comparator {
+                                        for hit in &mut hits {
+                                            hit.drift = Some(comp.compare(&hit.path));
+                                        }
+                                    }
+
                                     debug!(
                                         hits = hits.len(),
                                         elapsed = ?query_start.elapsed(),
@@ -110,21 +122,14 @@ impl ReplCommand {
                                     print!("{rendered}");
                                 }
                                 Err(err) => {
-                                    // Keep the REPL alive on malformed Tantivy query syntax (e.g. unclosed quotes)
                                     eprintln!("\x1b[1;31mQuery error:\x1b[0m {err}");
                                 }
                             }
                         }
                     }
                 }
-                Err(ReadlineError::Interrupted) => {
-                    // Ctrl+C clears current line cleanly without exiting
-                    continue;
-                }
-                Err(ReadlineError::Eof) => {
-                    // Ctrl+D exits cleanly
-                    break;
-                }
+                Err(ReadlineError::Interrupted) => continue,
+                Err(ReadlineError::Eof) => break,
                 Err(err) => return Err(err.into()),
             }
         }
@@ -166,7 +171,7 @@ fn print_help() {
     eprintln!(
         "\
 Commands:
-  <query>       Search manifests & code (supports kind:Deployment, ns:prod, name:api, labels:app=web)
+  <query>       Search manifests & code (supports kind:Deployment, ns:prod, symbol:foo)
   :limit <N>    Set max results shown per query
   :reload       Re-index the repository from disk
   :help         Show this help message

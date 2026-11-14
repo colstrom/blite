@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.7.0
+
+### Added
+- **Kitchen vs. Cluster Drift Inspector (`KitchenComparator`):** Added `src/drift.rs` using `similar` to compare matched cluster files against their counterpart `RepoRelativePath` in a reference kitchen repository (`--kitchen <PATH>`), classifying files as `in_sync`, `drifted`, or `cluster_only`.
+- **Unified Drift Diffs & Status Badges:** Attached `DriftReport` to `SearchHit` (`--json` compatible) and rendered color-coded `[in sync]`, `[drifted]`, and `[cluster-only]` badges alongside inline unified diffs (`↳ Kitchen Drift Diff:`) in terminal output.
+- **Global `--kitchen` Flag:** Added `--kitchen` across single-shot `search`, `repl`, and default interactive mode so drift inspection works both before and after subcommands.
+
 ## 0.6.0
 
 ### Added

@@ -48,6 +48,10 @@ pub struct Command {
     #[builder(default = Utf8PathBuf::from("."))]
     pub repo: Utf8PathBuf,
 
+    /// Optional path to the kitchen repository for drift comparison
+    #[arg(short, long, global = true)]
+    pub kitchen: Option<Utf8PathBuf>,
+
     /// Default result limit when launching interactive mode directly
     #[arg(short = 'n', long, default_value_t = 5)]
     #[builder(default = 5)]
@@ -68,7 +72,8 @@ pub enum Subcommand {
 impl Command {
     pub fn run(self) -> Result<(), crate::Error> {
         match self.subcommand {
-            Some(Subcommand::Search(cmd)) => {
+            Some(Subcommand::Search(mut cmd)) => {
+                cmd.kitchen = cmd.kitchen.or(self.kitchen);
                 if self.json {
                     let value = cmd.run().map_err(CommandError::from)?;
                     println!("{}", serde_json::to_string_pretty(&value)?);
@@ -80,12 +85,14 @@ impl Command {
                     print!("{rendered}");
                 }
             }
-            Some(Subcommand::Repl(cmd)) => {
+            Some(Subcommand::Repl(mut cmd)) => {
+                cmd.kitchen = cmd.kitchen.or(self.kitchen);
                 cmd.run().map_err(CommandError::from)?;
             }
             None => {
                 ReplCommand::builder()
                     .repo(self.repo)
+                    .maybe_kitchen(self.kitchen)
                     .limit(self.limit)
                     .build()
                     .run()

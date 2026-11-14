@@ -8,6 +8,7 @@ use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
 
 use crate::index::SearchHit;
+use crate::types::DriftStatus;
 use crate::types::VarResolutionSource;
 
 #[derive(Debug, Error, Diagnostic)]
@@ -63,8 +64,15 @@ impl TerminalRenderer {
                 (None, None) => String::new(),
             };
 
+            let drift_badge = match hit.drift.as_ref().map(|d| &d.status) {
+                Some(DriftStatus::InSync) => " \x1b[1;32m[in sync]\x1b[0m",
+                Some(DriftStatus::Drifted) => " \x1b[1;31m[drifted]\x1b[0m",
+                Some(DriftStatus::ClusterOnly) => " \x1b[1;34m[cluster-only]\x1b[0m",
+                None => "",
+            };
+
             out.push_str(&format!(
-                "\x1b[1;36m[{rank}] {location}\x1b[0m{badge} \x1b[2m(score: {score:.2})\x1b[0m\n",
+                "\x1b[1;36m[{rank}] {location}\x1b[0m{badge}{drift_badge} \x1b[2m(score: {score:.2})\x1b[0m\n",
                 score = hit.score
             ));
 
@@ -118,6 +126,23 @@ impl TerminalRenderer {
                         (_, VarResolutionSource::Unresolved) | (None, _) => {
                             out.push_str(&format!("    \x1b[36m{}\x1b[0m = \x1b[1;31m<unresolved>\x1b[0m\n", var.expression));
                         }
+                    }
+                }
+            }
+
+            if let Some(drift) = &hit.drift
+                && let Some(diff) = &drift.unified_diff
+            {
+                out.push_str("  \x1b[2m↳ Kitchen Drift Diff:\x1b[0m\n");
+                for line in diff.lines() {
+                    if line.starts_with('+') && !line.starts_with("+++") {
+                        out.push_str(&format!("    \x1b[32m{line}\x1b[0m\n"));
+                    } else if line.starts_with('-') && !line.starts_with("---") {
+                        out.push_str(&format!("    \x1b[31m{line}\x1b[0m\n"));
+                    } else if line.starts_with("@@") {
+                        out.push_str(&format!("    \x1b[36m{line}\x1b[0m\n"));
+                    } else {
+                        out.push_str(&format!("    \x1b[2m{line}\x1b[0m\n"));
                     }
                 }
             }

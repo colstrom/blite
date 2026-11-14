@@ -1,6 +1,6 @@
 [package]
 name = "blite"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 
 license = "MIT OR Apache-2.0"
@@ -25,6 +25,7 @@ rustyline = "19.0.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde-saphyr = { version = "2.1.1", features = ["miette"] }
 serde_json = "1.0.154"
+similar = "3.2.1"
 syntect = { version = "5.3.0", features = ["default-fancy"] }
 tantivy = "0.27.0"
 thiserror = "2.0.21"

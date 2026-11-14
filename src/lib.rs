@@ -2,6 +2,7 @@
 
 pub mod code;
 pub mod command;
+pub mod drift;
 pub mod error;
 pub mod index;
 pub mod k8s;

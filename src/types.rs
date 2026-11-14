@@ -84,3 +84,22 @@ pub struct LineRange {
     /// 1-based inclusive ending line number in the source file
     pub end: usize,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DriftStatus {
+    /// Identical to the corresponding file in the kitchen-sink repository
+    InSync,
+    /// Exists in the kitchen-sink repository with differences
+    Drifted,
+    /// Exists only in the target cluster repository (not present in kitchen)
+    ClusterOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriftReport {
+    pub status: DriftStatus,
+    /// Unified diff from kitchen (old) -> cluster (new), populated when `status == DriftStatus::Drifted`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unified_diff: Option<String>,
+}
