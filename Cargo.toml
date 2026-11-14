@@ -1,0 +1,47 @@
+[package]
+name = "blite"
+version = "0.1.0"
+edition = "2024"
+
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/colstrom/blite"
+repository = "https://github.com/colstrom/blite"
+authors = ["Chris Olstrom <chris@olstrom.com>"]
+keywords = ["cli", "search"]
+categories = ["command-line-utilities", "development-tools"]
+description = "Boring Local Information Telling Engine - tells you things you might want to know, using information you already have"
+
+[dependencies]
+bon = "3.10.3"
+camino = { version = "1.2.6", features = ["serde1"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+fs-err = "3.3.2"
+ignore = "0.4.34"
+miette = { version = "7.6.0", features = ["fancy"] }
+nutype = { version = "0.8.0", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tantivy = "0.27.0"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+[workspace.lints.rust]
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+absolute_paths = "warn"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+incremental = false
+lto = "fat"
+opt-level = 3
+strip = true
+panic = "abort"
