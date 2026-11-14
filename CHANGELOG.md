@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.8.0
+
+### Added
+- **Git History & Commit Intent Search (`gix`):** Added `GitHistoryIndex` (`src/git.rs`) using pure-Rust `gitoxide` (`gix`) to index commit messages, authors, timestamps, and parent-to-child tree path changes into an in-memory Tantivy index.
+- **`history` Subcommand & `--json` Support:** Added `blite history "<query>"` (`HistoryCommand`) to search commit intent and touched file paths (`path:manifests/...`) with structured `CommitHit` JSON output or formatted terminal summaries.
+- **Lazy REPL `:history` Command:** Added `:history <query>` (aliases `:git`, `:log`) to interactive mode, lazily indexing Git history on first query and invalidating cleanly on `:reload`.
+
 ## 0.7.0
 
 ### Added

@@ -11,6 +11,7 @@ use tracing::debug;
 use tracing::info;
 
 use crate::drift::KitchenComparator;
+use crate::git::GitHistoryIndex;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
 use crate::render::RenderError;
@@ -38,7 +39,7 @@ pub struct ReplCommand {
     #[builder(default = Utf8PathBuf::from("."))]
     pub repo: Utf8PathBuf,
 
-    /// Optional path to the kitchen repository for drift comparison
+    /// Optional path to the kitchen-sink repository for drift comparison
     #[arg(skip)]
     pub kitchen: Option<Utf8PathBuf>,
 
@@ -54,6 +55,7 @@ enum ReplAction {
     Reload,
     SetLimit(usize),
     Help,
+    History(SearchQuery),
     Search(SearchQuery),
 }
 
@@ -61,6 +63,7 @@ impl ReplCommand {
     pub fn run(self) -> Result<serde_json::Value, ReplError> {
         let start = Instant::now();
         let mut index = RepoIndex::build_from_dir(&self.repo)?;
+        let mut git_index: Option<GitHistoryIndex> = None;
         let renderer = TerminalRenderer::new();
         let comparator = self.kitchen.as_ref().map(|k| KitchenComparator::new(&self.repo, k));
         let mut limit = self.limit;
@@ -95,11 +98,40 @@ impl ReplCommand {
                             match RepoIndex::build_from_dir(&self.repo) {
                                 Ok(new_index) => {
                                     index = new_index;
+                                    // Clear lazy git index so next :history picks up new commits
+                                    git_index = None;
                                     info!(elapsed = ?reload_start.elapsed(), "reloaded repository index");
                                     eprintln!("Reloaded index in {:.0?}.", reload_start.elapsed());
                                 }
                                 Err(err) => {
                                     eprintln!("\x1b[1;31mReload failed:\x1b[0m {err}");
+                                }
+                            }
+                        }
+                        ReplAction::History(query) => {
+                            if git_index.is_none() {
+                                let git_start = Instant::now();
+                                match GitHistoryIndex::build_from_dir(&self.repo) {
+                                    Ok(built) => {
+                                        eprintln!("\x1b[2mIndexed git history in {:.0?}.\x1b[0m", git_start.elapsed());
+                                        git_index = Some(built);
+                                    }
+                                    Err(err) => {
+                                        eprintln!("\x1b[1;31mGit history error:\x1b[0m {err}");
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            if let Some(g_idx) = &git_index {
+                                match g_idx.search(&query, limit) {
+                                    Ok(hits) => {
+                                        let rendered = renderer.render_commit_hits(query.as_ref(), &hits);
+                                        print!("{rendered}");
+                                    }
+                                    Err(err) => {
+                                        eprintln!("\x1b[1;31mHistory query error:\x1b[0m {err}");
+                                    }
                                 }
                             }
                         }
@@ -145,6 +177,14 @@ fn parse_input(input: &str) -> ReplAction {
             "exit" | "quit" | "q" => return ReplAction::Exit,
             "reload" | "r" => return ReplAction::Reload,
             "help" | "h" | "?" => return ReplAction::Help,
+            "history" | "git" | "log" => {
+                let rest: String = parts.collect::<Vec<_>>().join(" ");
+                if let Ok(query) = SearchQuery::try_from(rest) {
+                    return ReplAction::History(query);
+                }
+                eprintln!("Usage: :history <query>");
+                return ReplAction::Continue;
+            }
             "limit" => {
                 if let Some(n) = parts.next().and_then(|s| s.parse::<usize>().ok())
                     && n > 0
@@ -171,10 +211,11 @@ fn print_help() {
     eprintln!(
         "\
 Commands:
-  <query>       Search manifests & code (supports kind:Deployment, ns:prod, symbol:foo)
-  :limit <N>    Set max results shown per query
-  :reload       Re-index the repository from disk
-  :help         Show this help message
-  :exit         Exit the REPL (or press Ctrl+D)"
+  <query>           Search manifests & code (supports kind:Deployment, ns:prod, symbol:foo)
+  :history <query>  Search Git commit messages, authors, and touched file paths
+  :limit <N>        Set max results shown per query
+  :reload           Re-index the repository from disk
+  :help             Show this help message
+  :exit             Exit the REPL (or press Ctrl+D)"
     );
 }

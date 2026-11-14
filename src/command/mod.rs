@@ -1,9 +1,13 @@
+pub mod history;
 pub mod repl;
 pub mod search;
 
 use bon::Builder;
 use camino::Utf8PathBuf;
 use clap::Parser;
+use history::HistoryCommand;
+use history::HistoryError;
+use history::HistoryPayload;
 use miette::Diagnostic;
 use repl::ReplCommand;
 use repl::ReplError;
@@ -20,6 +24,9 @@ use crate::render::TerminalRenderer;
 pub enum CommandError {
     #[diagnostic(transparent)]
     Search(#[from] SearchError),
+
+    #[diagnostic(transparent)]
+    History(#[from] HistoryError),
 
     #[diagnostic(transparent)]
     Repl(#[from] ReplError),
@@ -48,7 +55,7 @@ pub struct Command {
     #[builder(default = Utf8PathBuf::from("."))]
     pub repo: Utf8PathBuf,
 
-    /// Optional path to the kitchen repository for drift comparison
+    /// Optional path to the kitchen-sink repository for drift comparison
     #[arg(short, long, global = true)]
     pub kitchen: Option<Utf8PathBuf>,
 
@@ -65,6 +72,8 @@ pub struct Command {
 pub enum Subcommand {
     /// Search manifests, scripts, and docs using lexical BM25 ranking
     Search(SearchCommand),
+    /// Search Git commit history, authors, and touched file paths
+    History(HistoryCommand),
     /// Launch an interactive search session with a hot in-memory index
     Repl(ReplCommand),
 }
@@ -82,6 +91,16 @@ impl Command {
                     let rendered = TerminalRenderer::new()
                         .render_hits(payload.query.as_ref(), &payload.hits)
                         .map_err(CommandError::from)?;
+                    print!("{rendered}");
+                }
+            }
+            Some(Subcommand::History(cmd)) => {
+                if self.json {
+                    let value = cmd.run().map_err(CommandError::from)?;
+                    println!("{}", serde_json::to_string_pretty(&value)?);
+                } else {
+                    let payload: HistoryPayload = cmd.execute().map_err(CommandError::from)?;
+                    let rendered = TerminalRenderer::new().render_commit_hits(payload.query.as_ref(), &payload.hits);
                     print!("{rendered}");
                 }
             }

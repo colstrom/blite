@@ -103,3 +103,21 @@ pub struct DriftReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unified_diff: Option<String>,
 }
+
+#[nutype(
+    sanitize(trim),
+    validate(not_empty),
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+)]
+pub struct CommitOid(String);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitHit {
+    pub oid: CommitOid,
+    pub short_oid: String,
+    pub author: String,
+    pub timestamp: i64,
+    pub message: String,
+    pub touched_paths: Vec<RepoRelativePath>,
+    pub score: f32,
+}
