@@ -65,6 +65,28 @@ The best way to find out what your version does is to ask it for help!
 blite --help
 ```
 
+## Quick Start
+
+Point `blite` at a repository and start asking questions:
+
+```sh
+# Explore interactively (keeps the index hot in memory)
+blite --repo /path/to/repo
+
+# Run a single-shot query across manifests and code
+blite search "kind:Deployment ns:monitoring"
+
+# Compare a cluster repo against a reference "kitchen" repo for drift
+blite --repo /path/to/cluster --kitchen /path/to/kitchen
+
+# Search Git commit messages and touched paths to uncover the "why"
+blite history "memory limit"
+
+# Emit structured JSON for scripting
+blite --json search "symbol:reconcile"
+```
+
+
 ## License
 
 ```text
