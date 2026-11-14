@@ -1,6 +1,5 @@
 use std::sync::Mutex;
 
-use bon::Builder;
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use ignore::WalkBuilder;
@@ -12,7 +11,6 @@ use tantivy::Index;
 use tantivy::ReloadPolicy;
 use tantivy::TantivyDocument;
 use tantivy::collector::TopDocs;
-use tantivy::doc;
 use tantivy::query::QueryParser;
 use tantivy::schema::Field;
 use tantivy::schema::STORED;
@@ -23,12 +21,15 @@ use thiserror::Error;
 use tracing::debug;
 use tracing::instrument;
 
-use crate::k8s::extract_k8s_metadata;
+use crate::k8s::ParsedYaml;
+use crate::k8s::SubstitutionTable;
+use crate::k8s::parse_k8s_yaml;
 use crate::types::K8sKind;
 use crate::types::K8sMetadata;
 use crate::types::K8sName;
 use crate::types::K8sNamespace;
 use crate::types::RepoRelativePath;
+use crate::types::ResolvedVar;
 use crate::types::SearchQuery;
 
 #[derive(Debug, Error, Diagnostic)]
@@ -52,6 +53,8 @@ pub struct SearchHit {
     pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub k8s: Option<K8sMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_vars: Vec<ResolvedVar>,
     pub content: String,
 }
 
@@ -59,13 +62,12 @@ pub struct SearchHit {
 struct IndexedFile {
     rel_path: RepoRelativePath,
     content: String,
-    k8s: Option<K8sMetadata>,
+    parsed_yaml: Option<ParsedYaml>,
 }
 
-#[derive(Builder)]
-#[builder(on(PathBuf, into))]
 pub struct RepoIndex {
     index: Index,
+    substitutions: SubstitutionTable,
     path_field: Field,
     body_field: Field,
     kind_field: Field,
@@ -75,16 +77,25 @@ pub struct RepoIndex {
 }
 
 impl RepoIndex {
-    /// Walks `root` in parallel, extracts Kubernetes metadata via `rayon`,
+    /// Walks `root` in parallel, extracts Kubernetes metadata & ConfigMap substitutions via `rayon`,
     /// and builds an in-memory Tantivy index.
     #[instrument(skip_all, fields(root = %root.as_ref()))]
     pub fn build_from_dir(root: impl AsRef<Utf8Path>) -> Result<Self, IndexError> {
         let root = root.as_ref();
         let files = collect_repo_files(root)?;
-        let k8s_count = files.iter().filter(|f| f.k8s.is_some()).count();
+
+        let mut substitutions = SubstitutionTable::default();
+        for file in &files {
+            if let Some(parsed) = &file.parsed_yaml
+                && let Some(data) = &parsed.configmap_data
+            {
+                substitutions.insert_configmap(&file.rel_path, &parsed.metadata, data.clone());
+            }
+        }
+
         debug!(
             file_count = files.len(),
-            k8s_manifests = k8s_count,
+            flux_substitutions = substitutions.flux_var_count(),
             "collected and parsed repository files"
         );
 
@@ -105,7 +116,8 @@ impl RepoIndex {
             document.add_text(path_field, file.rel_path.as_str());
             document.add_text(body_field, &file.content);
 
-            if let Some(k8s) = &file.k8s {
+            if let Some(parsed) = &file.parsed_yaml {
+                let k8s = &parsed.metadata;
                 document.add_text(kind_field, k8s.kind.as_str());
                 if let Some(name) = &k8s.name {
                     document.add_text(name_field, name.as_str());
@@ -124,6 +136,7 @@ impl RepoIndex {
 
         Ok(Self {
             index,
+            substitutions,
             path_field,
             body_field,
             kind_field,
@@ -133,8 +146,6 @@ impl RepoIndex {
         })
     }
 
-    /// Executes a lexical BM25 search against the in-memory index.
-    /// Supports structured field prefixes: `kind:`, `name:`, `ns:`, `labels:`, `path:`.
     #[instrument(skip(self), fields(query = %query))]
     pub fn search(&self, query: &SearchQuery, limit: usize) -> Result<Vec<SearchHit>, IndexError> {
         let reader = self.index.reader_builder().reload_policy(ReloadPolicy::Manual).try_into()?;
@@ -166,11 +177,13 @@ impl RepoIndex {
                 .to_string();
 
             let k8s = self.extract_doc_k8s(&doc);
+            let resolved_vars = self.substitutions.resolve_in_content(&content);
 
             hits.push(SearchHit {
                 path: RepoRelativePath::from(Utf8PathBuf::from(path_str)),
                 score,
                 k8s,
+                resolved_vars,
                 content,
             });
         }
@@ -248,8 +261,12 @@ fn collect_repo_files(root: &Utf8Path) -> Result<Vec<IndexedFile>, IndexError> {
         .unwrap_or_default()
         .into_par_iter()
         .map(|(rel_path, content)| {
-            let k8s = extract_k8s_metadata(&rel_path, &content);
-            IndexedFile { rel_path, content, k8s }
+            let parsed_yaml = parse_k8s_yaml(&rel_path, &content);
+            IndexedFile {
+                rel_path,
+                content,
+                parsed_yaml,
+            }
         })
         .collect();
 

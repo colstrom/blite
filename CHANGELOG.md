@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.5.0
+
+### Added
+- **Auto-Discovery of Flux & Repo ConfigMaps (`SubstitutionTable`):** Automatically indexes `data` and `stringData` across repository `ConfigMap` manifests during parallel ingestion, prioritizing `flux-system/substitutions` (`manifests/flux-system/resources/ConfigMap/substitutions.yaml`) with fallback to other repository ConfigMaps.
+- **Flux `envsubst` Expression Resolution:** Added pure-Rust `drone/envsubst`-compatible pattern matching (`${VAR}`, `${VAR:-default}`, `${VAR:=default}`, `${VAR:+alt}`, etc.) via `regex-lite` to resolve variable references inside retrieved manifests.
+- **Substitutions Footer & Structured JSON Output:** Attached `resolved_vars` (`ResolvedVar` + `VarResolutionSource`) to `SearchHit` and rendered a color-coded `↳ Substitutions:` summary beneath matching manifests (explicitly flagging `<unresolved>` variables).
+
 ## 0.4.0
 
 ### Added
