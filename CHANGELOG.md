@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.3.0
+
+### Added
+- **Interactive REPL Mode (`ReplCommand`):** Added a `rustyline`-powered interactive loop (`blite> `) that keeps both the Tantivy RAM index and `syntect` syntax definitions hot in memory for sub-15ms queries.
+- **Zero-Subcommand Default:** Running `blite` without a subcommand now launches directly into interactive mode (supporting top-level `--repo` and `--limit` flags), alongside the explicit `blite repl` subcommand.
+- **Session Control Commands:** Added `:reload` (hot-rebuilds the repository index in place), `:limit <N>`, `:help`, and `:exit`/`:quit` (with clean `Ctrl+C` and `Ctrl+D` handling).
+
 ## 0.2.0
 
 ### Added
