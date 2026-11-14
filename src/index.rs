@@ -21,6 +21,7 @@ use thiserror::Error;
 use tracing::debug;
 use tracing::instrument;
 
+use crate::code::chunk_code_file;
 use crate::k8s::ParsedYaml;
 use crate::k8s::SubstitutionTable;
 use crate::k8s::parse_k8s_yaml;
@@ -28,9 +29,11 @@ use crate::types::K8sKind;
 use crate::types::K8sMetadata;
 use crate::types::K8sName;
 use crate::types::K8sNamespace;
+use crate::types::LineRange;
 use crate::types::RepoRelativePath;
 use crate::types::ResolvedVar;
 use crate::types::SearchQuery;
+use crate::types::SymbolName;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum IndexError {
@@ -53,16 +56,22 @@ pub struct SearchHit {
     pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub k8s: Option<K8sMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<SymbolName>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines: Option<LineRange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolved_vars: Vec<ResolvedVar>,
     pub content: String,
 }
 
 #[derive(Debug, Clone)]
-struct IndexedFile {
+struct IndexDocument {
     rel_path: RepoRelativePath,
     content: String,
     parsed_yaml: Option<ParsedYaml>,
+    symbol: Option<SymbolName>,
+    lines: Option<LineRange>,
 }
 
 pub struct RepoIndex {
@@ -74,29 +83,30 @@ pub struct RepoIndex {
     name_field: Field,
     ns_field: Field,
     labels_field: Field,
+    symbol_field: Field,
+    line_start_field: Field,
+    line_end_field: Field,
 }
 
 impl RepoIndex {
-    /// Walks `root` in parallel, extracts Kubernetes metadata & ConfigMap substitutions via `rayon`,
-    /// and builds an in-memory Tantivy index.
     #[instrument(skip_all, fields(root = %root.as_ref()))]
     pub fn build_from_dir(root: impl AsRef<Utf8Path>) -> Result<Self, IndexError> {
         let root = root.as_ref();
-        let files = collect_repo_files(root)?;
+        let docs = collect_repo_documents(root)?;
 
         let mut substitutions = SubstitutionTable::default();
-        for file in &files {
-            if let Some(parsed) = &file.parsed_yaml
+        for doc in &docs {
+            if let Some(parsed) = &doc.parsed_yaml
                 && let Some(data) = &parsed.configmap_data
             {
-                substitutions.insert_configmap(&file.rel_path, &parsed.metadata, data.clone());
+                substitutions.insert_configmap(&doc.rel_path, &parsed.metadata, data.clone());
             }
         }
 
         debug!(
-            file_count = files.len(),
+            document_count = docs.len(),
             flux_substitutions = substitutions.flux_var_count(),
-            "collected and parsed repository files"
+            "collected and parsed repository documents"
         );
 
         let mut schema_builder = Schema::builder();
@@ -106,17 +116,20 @@ impl RepoIndex {
         let name_field = schema_builder.add_text_field("name", TEXT | STORED);
         let ns_field = schema_builder.add_text_field("ns", TEXT | STORED);
         let labels_field = schema_builder.add_text_field("labels", TEXT | STORED);
+        let symbol_field = schema_builder.add_text_field("symbol", TEXT | STORED);
+        let line_start_field = schema_builder.add_u64_field("line_start", STORED);
+        let line_end_field = schema_builder.add_u64_field("line_end", STORED);
         let schema = schema_builder.build();
 
         let index = Index::create_in_ram(schema);
         let mut writer = index.writer(15_000_000)?;
 
-        for file in files {
+        for item in docs {
             let mut document = TantivyDocument::new();
-            document.add_text(path_field, file.rel_path.as_str());
-            document.add_text(body_field, &file.content);
+            document.add_text(path_field, item.rel_path.as_str());
+            document.add_text(body_field, &item.content);
 
-            if let Some(parsed) = &file.parsed_yaml {
+            if let Some(parsed) = &item.parsed_yaml {
                 let k8s = &parsed.metadata;
                 document.add_text(kind_field, k8s.kind.as_str());
                 if let Some(name) = &k8s.name {
@@ -128,6 +141,15 @@ impl RepoIndex {
                 for label in &k8s.labels {
                     document.add_text(labels_field, label);
                 }
+            }
+
+            if let Some(symbol) = &item.symbol {
+                document.add_text(symbol_field, symbol.as_str());
+            }
+
+            if let Some(lines) = item.lines {
+                document.add_u64(line_start_field, lines.start as u64);
+                document.add_u64(line_end_field, lines.end as u64);
             }
 
             writer.add_document(document)?;
@@ -143,6 +165,9 @@ impl RepoIndex {
             name_field,
             ns_field,
             labels_field,
+            symbol_field,
+            line_start_field,
+            line_end_field,
         })
     }
 
@@ -160,6 +185,7 @@ impl RepoIndex {
                 self.name_field,
                 self.ns_field,
                 self.labels_field,
+                self.symbol_field,
             ],
         );
         let parsed_query = query_parser.parse_query(query.as_ref())?;
@@ -177,12 +203,24 @@ impl RepoIndex {
                 .to_string();
 
             let k8s = self.extract_doc_k8s(&doc);
-            let resolved_vars = self.substitutions.resolve_in_content(&content);
+            let symbol = doc
+                .get_first(self.symbol_field)
+                .and_then(|v| v.as_str())
+                .and_then(|s| SymbolName::try_from(s.to_string()).ok());
+            let lines = self.extract_doc_lines(&doc);
+
+            let resolved_vars = if k8s.is_some() {
+                self.substitutions.resolve_in_content(&content)
+            } else {
+                Vec::new()
+            };
 
             hits.push(SearchHit {
                 path: RepoRelativePath::from(Utf8PathBuf::from(path_str)),
                 score,
                 k8s,
+                symbol,
+                lines,
                 resolved_vars,
                 content,
             });
@@ -217,9 +255,15 @@ impl RepoIndex {
             labels,
         })
     }
+
+    fn extract_doc_lines(&self, doc: &TantivyDocument) -> Option<LineRange> {
+        let start = doc.get_first(self.line_start_field).and_then(|v| v.as_u64())? as usize;
+        let end = doc.get_first(self.line_end_field).and_then(|v| v.as_u64())? as usize;
+        Some(LineRange { start, end })
+    }
 }
 
-fn collect_repo_files(root: &Utf8Path) -> Result<Vec<IndexedFile>, IndexError> {
+fn collect_repo_documents(root: &Utf8Path) -> Result<Vec<IndexDocument>, IndexError> {
     let raw_files = Mutex::new(Vec::new());
 
     WalkBuilder::new(root.as_std_path())
@@ -255,20 +299,42 @@ fn collect_repo_files(root: &Utf8Path) -> Result<Vec<IndexedFile>, IndexError> {
                 ignore::WalkState::Continue
             })
         });
-
-    let files = raw_files
+    let docs = raw_files
         .into_inner()
         .unwrap_or_default()
         .into_par_iter()
-        .map(|(rel_path, content)| {
-            let parsed_yaml = parse_k8s_yaml(&rel_path, &content);
-            IndexedFile {
-                rel_path,
-                content,
-                parsed_yaml,
+        .flat_map(|(rel_path, content)| {
+            if let Some(parsed_yaml) = parse_k8s_yaml(&rel_path, &content) {
+                return vec![IndexDocument {
+                    rel_path,
+                    content,
+                    parsed_yaml: Some(parsed_yaml),
+                    symbol: None,
+                    lines: None,
+                }];
+            }
+            let chunks = chunk_code_file(&rel_path, &content);
+            if chunks.is_empty() {
+                vec![IndexDocument {
+                    rel_path,
+                    content,
+                    parsed_yaml: None,
+                    symbol: None,
+                    lines: None,
+                }]
+            } else {
+                chunks
+                    .into_iter()
+                    .map(|chunk| IndexDocument {
+                        rel_path: rel_path.clone(),
+                        content: chunk.content,
+                        parsed_yaml: None,
+                        symbol: chunk.symbol,
+                        lines: Some(chunk.lines),
+                    })
+                    .collect()
             }
         })
         .collect();
-
-    Ok(files)
+    Ok(docs)
 }

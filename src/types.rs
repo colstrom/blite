@@ -69,3 +69,18 @@ pub struct ResolvedVar {
     pub value: Option<String>,
     pub source: VarResolutionSource,
 }
+
+#[nutype(
+    sanitize(trim),
+    validate(not_empty),
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+)]
+pub struct SymbolName(String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineRange {
+    /// 1-based inclusive starting line number in the source file
+    pub start: usize,
+    /// 1-based inclusive ending line number in the source file
+    pub end: usize,
+}

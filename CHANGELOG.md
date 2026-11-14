@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.6.0
+
+### Added
+- **AST Function & Script Indexing (`tree-sitter`):** Added `chunk_code_file` (`src/code.rs`) using `tree-sitter-rust`, `tree-sitter-ruby`, and `tree-sitter-bash` (plus function/def block chunking for `.awk`, `.jq`, and `.yq` scripts and shebang detection) to split files over 80 lines into top-level definitions with leading doc comments attached.
+- **Structured `symbol:` Queries & Line Ranges:** Added `SymbolName` (`nutype`) and `LineRange` to `SearchHit`, indexed `symbol`, `line_start`, and `line_end` in Tantivy, and enabled `symbol:<name>` query filtering.
+- **Line-Accurate Terminal Rendering:** Updated `TerminalRenderer` to display `path:start..end` locations, `[fn/def <symbol>]` badges, and accurate source-file line numbers in syntax-highlighted snippets.
+
 ## 0.5.0
 
 ### Added

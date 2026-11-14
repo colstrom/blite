@@ -46,20 +46,25 @@ impl TerminalRenderer {
 
         for (idx, hit) in hits.iter().enumerate() {
             let rank = idx + 1;
-            let k8s_badge = match &hit.k8s {
-                Some(k8s) => {
+            let location = match hit.lines {
+                Some(range) => format!("{}:{}..{}", hit.path, range.start, range.end),
+                None => hit.path.to_string(),
+            };
+
+            let badge = match (&hit.k8s, &hit.symbol) {
+                (Some(k8s), _) => {
                     let name = k8s.name.as_ref().map_or("<unnamed>", |n| n.as_str());
                     match &k8s.namespace {
                         Some(ns) => format!(" \x1b[1;33m[{}/{name} @ {ns}]\x1b[0m", k8s.kind),
                         None => format!(" \x1b[1;33m[{}/{name}]\x1b[0m", k8s.kind),
                     }
                 }
-                None => String::new(),
+                (None, Some(sym)) => format!(" \x1b[1;35m[fn/def {sym}]\x1b[0m"),
+                (None, None) => String::new(),
             };
 
             out.push_str(&format!(
-                "\x1b[1;36m[{rank}] {path}\x1b[0m{k8s_badge} \x1b[2m(score: {score:.2})\x1b[0m\n",
-                path = hit.path,
+                "\x1b[1;36m[{rank}] {location}\x1b[0m{badge} \x1b[2m(score: {score:.2})\x1b[0m\n",
                 score = hit.score
             ));
 
@@ -70,9 +75,10 @@ impl TerminalRenderer {
                 .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
 
             let mut highlighter = HighlightLines::new(syntax, theme);
+            let base_line = hit.lines.map_or(1, |r| r.start);
 
             for (line_idx, line) in LinesWithEndings::from(&hit.content).enumerate() {
-                let line_num = line_idx + 1;
+                let line_num = base_line + line_idx;
                 let ranges: Vec<(Style, &str)> = highlighter.highlight_line(line, &self.syntax_set)?;
                 let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
                 out.push_str(&format!("\x1b[2m{line_num:>4} │\x1b[0m {escaped}"));

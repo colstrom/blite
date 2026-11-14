@@ -1,5 +1,6 @@
 // src/lib.rs
 
+pub mod code;
 pub mod command;
 pub mod error;
 pub mod index;
