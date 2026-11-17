@@ -1,5 +1,7 @@
 // src/render.rs
 
+use jiff::Timestamp;
+use jiff::Unit;
 use miette::Diagnostic;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Style;
@@ -133,6 +135,14 @@ impl TerminalRenderer {
                 }
             }
 
+            if let Some(latest) = hit.recent_commits.first() {
+                let relative = format_relative_age(latest.timestamp);
+                out.push_str(&format!(
+                    "  \x1b[2m↳ Last commit:\x1b[0m \x1b[33m{}\x1b[0m {} \x1b[2m({}, {}, {})\x1b[0m\n",
+                    latest.short_oid, latest.subject, latest.author, latest.committed_at, relative
+                ));
+            }
+
             if let Some(drift) = &hit.drift
                 && let Some(diff) = &drift.unified_diff
             {
@@ -184,5 +194,33 @@ impl TerminalRenderer {
         }
 
         out
+    }
+}
+
+fn format_relative_age(unix_seconds: i64) -> String {
+    let Ok(then) = Timestamp::from_second(unix_seconds) else {
+        return "unknown".to_string();
+    };
+    let now = Timestamp::now();
+    let total_secs = now.as_second().saturating_sub(then.as_second());
+
+    if total_secs < 60 {
+        return "just now".to_string();
+    }
+
+    let Ok(span) = now.since((Unit::Year, then)) else {
+        return format!("{}d ago", total_secs / 86_400);
+    };
+
+    if span.get_years() > 0 {
+        format!("{}y ago", span.get_years())
+    } else if span.get_months() > 0 {
+        format!("{}mo ago", span.get_months())
+    } else if span.get_days() > 0 {
+        format!("{}d ago", span.get_days())
+    } else if span.get_hours() > 0 {
+        format!("{}h ago", span.get_hours())
+    } else {
+        format!("{}m ago", span.get_minutes().max(1))
     }
 }

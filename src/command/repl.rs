@@ -24,6 +24,7 @@ use tracing::debug;
 use tracing::info;
 
 use crate::drift::KitchenComparator;
+use crate::git::FileCommitHistory;
 use crate::git::GitHistoryIndex;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
@@ -260,6 +261,7 @@ impl ReplCommand {
         let start = Instant::now();
         let mut index = RepoIndex::build_from_dir(&self.repo)?;
         let mut git_index: Option<GitHistoryIndex> = None;
+        let mut file_history: Option<FileCommitHistory> = None;
         let renderer = TerminalRenderer::new();
         let comparator = self.kitchen.as_ref().map(|k| KitchenComparator::new(&self.repo, k));
         let mut limit = self.limit;
@@ -323,6 +325,7 @@ impl ReplCommand {
                                         helper.update_from_index(&index);
                                     }
                                     git_index = None;
+                                    file_history = None;
                                     info!(elapsed = ?reload_start.elapsed(), "reloaded repository index");
                                     eprintln!("Reloaded index in {:.0?}.", reload_start.elapsed());
                                 }
@@ -364,10 +367,15 @@ impl ReplCommand {
                         },
                         ReplAction::Search(query) => {
                             let query_start = Instant::now();
+                            let history = file_history.get_or_insert_with(|| FileCommitHistory::build_from_dir(&self.repo));
                             match index.search(&query, limit) {
                                 Ok(mut hits) => {
-                                    if let Some(comp) = &comparator {
-                                        for hit in &mut hits {
+                                    for hit in &mut hits {
+                                        let commits = history.commits_for(&hit.path);
+                                        if !commits.is_empty() {
+                                            hit.recent_commits = commits.to_vec();
+                                        }
+                                        if let Some(comp) = &comparator {
                                             hit.drift = Some(comp.compare(&hit.path));
                                         }
                                     }

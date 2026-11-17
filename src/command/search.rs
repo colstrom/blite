@@ -9,6 +9,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::drift::KitchenComparator;
+use crate::git::FileCommitHistory;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
 use crate::index::SearchHit;
@@ -60,6 +61,14 @@ impl SearchCommand {
             let comparator = KitchenComparator::new(&self.repo, kitchen_root);
             for hit in &mut hits {
                 hit.drift = Some(comparator.compare(&hit.path));
+            }
+        }
+
+        let file_history = FileCommitHistory::build_from_dir(&self.repo);
+        for hit in &mut hits {
+            let commits = file_history.commits_for(&hit.path);
+            if !commits.is_empty() {
+                hit.recent_commits = commits.to_vec();
             }
         }
 

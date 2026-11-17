@@ -125,3 +125,14 @@ pub struct CommitHit {
     pub touched_paths: Vec<RepoRelativePath>,
     pub score: f32,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileCommit {
+    pub oid: CommitOid,
+    pub short_oid: String,
+    pub committed_at: String,
+    #[serde(skip)]
+    pub timestamp: i64,
+    pub author: String,
+    pub subject: String,
+}

@@ -1,5 +1,11 @@
 # Change Log
 
+## 0.8.4
+
+### Added
+- **Per-File Git Commit Enrichment (`FileCommitHistory` + `jiff`):** Indexed commit history per repository file (newest to oldest) with commit OID, RFC3339 timestamp, author, and subject line, attaching the full ordered list to `SearchHit` in `--json` output.
+- **Most-Recent Commit Footer in Terminal & REPL Output:** Displayed a concise `↳ Last commit:` summary beneath search hits showing the latest commit's short OID, subject, author, RFC3339 timestamp, and human-friendly relative age (lazily cached in interactive mode and refreshed on `:reload`).
+
 ## 0.8.3
 
 ### Added

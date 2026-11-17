@@ -1,11 +1,13 @@
 // src/git.rs
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use gix::bstr::ByteSlice;
 use gix::object::tree::diff::Action;
+use jiff::Timestamp;
 use miette::Diagnostic;
 use tantivy::Index;
 use tantivy::ReloadPolicy;
@@ -23,6 +25,7 @@ use tracing::instrument;
 
 use crate::types::CommitHit;
 use crate::types::CommitOid;
+use crate::types::FileCommit;
 use crate::types::RepoRelativePath;
 use crate::types::SearchQuery;
 
@@ -230,4 +233,99 @@ fn collect_commit_paths(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Vec
     });
 
     paths.into_inner()
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FileCommitHistory {
+    by_path: HashMap<RepoRelativePath, Vec<FileCommit>>,
+}
+
+impl FileCommitHistory {
+    /// Walks up to `DEFAULT_MAX_COMMITS` from `HEAD` (newest to oldest) and maps
+    /// each touched `RepoRelativePath` to the ordered commits that modified it.
+    /// Returns an empty map if `root` is not inside a Git repository.
+    #[instrument(skip_all, fields(root = %root.as_ref()))]
+    pub fn build_from_dir(root: impl AsRef<Utf8Path>) -> Self {
+        let root = root.as_ref();
+        let Ok(repo) = gix::discover(root.as_std_path()) else {
+            return Self::default();
+        };
+
+        let Ok(head_id) = repo.head_id() else {
+            return Self::default();
+        };
+
+        let Ok(walk) = head_id.ancestors().all() else {
+            return Self::default();
+        };
+
+        // Compute prefix if `root` is a subdirectory of the git workdir
+        let repo_prefix: Option<Utf8PathBuf> = repo.workdir().and_then(|wd| Utf8Path::from_path(wd)).and_then(|wd| {
+            root.canonicalize_utf8().ok().and_then(|r| {
+                wd.canonicalize_utf8()
+                    .ok()
+                    .and_then(|w| r.strip_prefix(&w).ok().map(ToOwned::to_owned))
+            })
+        });
+
+        let mut by_path: HashMap<RepoRelativePath, Vec<FileCommit>> = HashMap::new();
+
+        for info in walk.take(DEFAULT_MAX_COMMITS) {
+            let Ok(info) = info else { continue };
+            let Ok(commit) = info.object() else { continue };
+
+            let oid_str = commit.id.to_string();
+            let Ok(oid) = CommitOid::try_from(oid_str.clone()) else {
+                continue;
+            };
+            let short_oid = oid_str.chars().take(8).collect();
+
+            let raw_msg = commit.message_raw_sloppy().to_str_lossy();
+            let subject = raw_msg.lines().next().unwrap_or_default().trim().to_string();
+
+            let (author, timestamp) = match commit.author() {
+                Ok(sig) => {
+                    let ts = sig
+                        .time()
+                        .map(|t| t.seconds)
+                        .unwrap_or_else(|_| sig.time.split_whitespace().next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0));
+                    (format!("{} <{}>", sig.name.to_str_lossy(), sig.email.to_str_lossy()), ts)
+                }
+                Err(_) => ("unknown".to_string(), 0),
+            };
+
+            let committed_at = Timestamp::from_second(timestamp)
+                .map(|ts| ts.to_string())
+                .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
+
+            let file_commit = FileCommit {
+                oid,
+                short_oid,
+                committed_at,
+                timestamp,
+                author,
+                subject,
+            };
+
+            for touched in collect_commit_paths(&repo, &commit) {
+                let normalized = match &repo_prefix {
+                    Some(prefix) if !prefix.as_str().is_empty() => {
+                        let Ok(stripped) = touched.as_path().strip_prefix(prefix) else {
+                            continue;
+                        };
+                        RepoRelativePath::from(stripped.to_path_buf())
+                    }
+                    _ => touched,
+                };
+
+                by_path.entry(normalized).or_default().push(file_commit.clone());
+            }
+        }
+
+        Self { by_path }
+    }
+
+    pub fn commits_for(&self, path: &RepoRelativePath) -> &[FileCommit] {
+        self.by_path.get(path).map_or(&[], Vec::as_slice)
+    }
 }

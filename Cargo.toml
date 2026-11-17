@@ -2,7 +2,7 @@
 
 [package]
 name = "blite"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2024"
 rust-version = "1.95"
 
@@ -21,6 +21,7 @@ dirs = "7.0.0"
 fs-err = "3.3.2"
 gix = { version = "0.90.0", default-features = false, features = ["blob-diff", "revision", "sha1"] }
 ignore = "0.4.34"
+jiff = { version = "1.0.0", features = ["serde"] }
 miette = { version = "7.6.0", features = ["fancy"] }
 nutype = { version = "0.8.0", features = ["serde"] }
 rayon = "1.12.0"

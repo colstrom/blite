@@ -29,6 +29,7 @@ use crate::k8s::ParsedYaml;
 use crate::k8s::SubstitutionTable;
 use crate::k8s::parse_k8s_yaml;
 use crate::types::DriftReport;
+use crate::types::FileCommit;
 use crate::types::K8sKind;
 use crate::types::K8sMetadata;
 use crate::types::K8sName;
@@ -66,6 +67,8 @@ pub struct SearchHit {
     pub lines: Option<LineRange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resolved_vars: Vec<ResolvedVar>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_commits: Vec<FileCommit>,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drift: Option<DriftReport>,
@@ -269,6 +272,7 @@ impl RepoIndex {
                 symbol,
                 lines,
                 resolved_vars,
+                recent_commits: Vec::new(),
                 content,
                 drift: None,
             });
