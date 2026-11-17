@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.8.1
+
+- set MSRV to `1.95`, thanks @ital0sant0s for reporting the build failure on older Rust due to the use of `cfg_select!`.
+
 ## 0.8.0
 
 ### Added
