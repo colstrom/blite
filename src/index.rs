@@ -1,5 +1,6 @@
 // src/index.rs
 
+use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use camino::Utf8Path;
@@ -82,12 +83,17 @@ struct IndexDocument {
 pub struct RepoIndex {
     index: Index,
     substitutions: SubstitutionTable,
+    kinds: Vec<String>,
+    namespaces: Vec<String>,
+    labels: Vec<String>,
+    annotations: Vec<String>,
     path_field: Field,
     body_field: Field,
     kind_field: Field,
     name_field: Field,
     ns_field: Field,
     labels_field: Field,
+    annotations_field: Field,
     symbol_field: Field,
     line_start_field: Field,
     line_end_field: Field,
@@ -100,11 +106,32 @@ impl RepoIndex {
         let docs = collect_repo_documents(root)?;
 
         let mut substitutions = SubstitutionTable::default();
+        let mut kinds = BTreeSet::new();
+        let mut namespaces = BTreeSet::new();
+        let mut labels = BTreeSet::new();
+        let mut annotations = BTreeSet::new();
+
         for doc in &docs {
-            if let Some(parsed) = &doc.parsed_yaml
-                && let Some(data) = &parsed.configmap_data
-            {
-                substitutions.insert_configmap(&doc.rel_path, &parsed.metadata, data.clone());
+            if let Some(parsed) = &doc.parsed_yaml {
+                kinds.insert(parsed.metadata.kind.as_str().to_string());
+                if let Some(ns) = &parsed.metadata.namespace {
+                    namespaces.insert(ns.as_str().to_string());
+                }
+                for label in &parsed.metadata.labels {
+                    if let Some((key, _)) = label.split_once('=') {
+                        labels.insert(key.to_string());
+                    }
+                    labels.insert(label.clone());
+                }
+                for annotation in &parsed.metadata.annotations {
+                    if let Some((key, _)) = annotation.split_once('=') {
+                        annotations.insert(key.to_string());
+                    }
+                    annotations.insert(annotation.clone());
+                }
+                if let Some(data) = &parsed.configmap_data {
+                    substitutions.insert_configmap(&doc.rel_path, &parsed.metadata, data.clone());
+                }
             }
         }
 
@@ -121,6 +148,7 @@ impl RepoIndex {
         let name_field = schema_builder.add_text_field("name", TEXT | STORED);
         let ns_field = schema_builder.add_text_field("ns", TEXT | STORED);
         let labels_field = schema_builder.add_text_field("labels", TEXT | STORED);
+        let annotations_field = schema_builder.add_text_field("annotations", TEXT | STORED);
         let symbol_field = schema_builder.add_text_field("symbol", TEXT | STORED);
         let line_start_field = schema_builder.add_u64_field("line_start", STORED);
         let line_end_field = schema_builder.add_u64_field("line_end", STORED);
@@ -145,6 +173,15 @@ impl RepoIndex {
                 }
                 for label in &k8s.labels {
                     document.add_text(labels_field, label);
+                    if let Some((key, _)) = label.split_once('=') {
+                        document.add_text(labels_field, key);
+                    }
+                }
+                for annotation in &k8s.annotations {
+                    document.add_text(annotations_field, annotation);
+                    if let Some((key, _)) = annotation.split_once('=') {
+                        document.add_text(annotations_field, key);
+                    }
                 }
             }
 
@@ -164,12 +201,17 @@ impl RepoIndex {
         Ok(Self {
             index,
             substitutions,
+            kinds: kinds.into_iter().collect(),
+            namespaces: namespaces.into_iter().collect(),
+            labels: labels.into_iter().collect(),
+            annotations: annotations.into_iter().collect(),
             path_field,
             body_field,
             kind_field,
             name_field,
             ns_field,
             labels_field,
+            annotations_field,
             symbol_field,
             line_start_field,
             line_end_field,
@@ -251,7 +293,16 @@ impl RepoIndex {
 
         let labels = doc
             .get_all(self.labels_field)
-            .filter_map(|v| v.as_str().map(ToString::to_string))
+            .filter_map(|v| v.as_str())
+            .filter(|s| s.contains('='))
+            .map(ToString::to_string)
+            .collect();
+
+        let annotations = doc
+            .get_all(self.annotations_field)
+            .filter_map(|v| v.as_str())
+            .filter(|s| s.contains('='))
+            .map(ToString::to_string)
             .collect();
 
         Some(K8sMetadata {
@@ -259,6 +310,7 @@ impl RepoIndex {
             name,
             namespace,
             labels,
+            annotations,
         })
     }
 
@@ -266,6 +318,22 @@ impl RepoIndex {
         let start = doc.get_first(self.line_start_field).and_then(|v| v.as_u64())? as usize;
         let end = doc.get_first(self.line_end_field).and_then(|v| v.as_u64())? as usize;
         Some(LineRange { start, end })
+    }
+
+    pub fn kinds(&self) -> &[String] {
+        &self.kinds
+    }
+
+    pub fn namespaces(&self) -> &[String] {
+        &self.namespaces
+    }
+
+    pub fn labels(&self) -> &[String] {
+        &self.labels
+    }
+
+    pub fn annotations(&self) -> &[String] {
+        &self.annotations
     }
 }
 

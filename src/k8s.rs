@@ -32,6 +32,8 @@ struct RawObjectMeta {
     namespace: Option<String>,
     #[serde(default)]
     labels: BTreeMap<String, String>,
+    #[serde(default)]
+    annotations: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,14 +62,15 @@ pub fn parse_k8s_yaml(path: &Utf8Path, content: &str) -> Option<ParsedYaml> {
     let raw: RawManifest = serde_saphyr::from_str(content).ok()?;
     let kind = raw.kind.and_then(|k| K8sKind::try_from(k).ok())?;
 
-    let (name, namespace, labels) = match raw.metadata {
+    let (name, namespace, labels, annotations) = match raw.metadata {
         Some(meta) => {
             let name = meta.name.and_then(|n| K8sName::try_from(n).ok());
             let namespace = meta.namespace.and_then(|ns| K8sNamespace::try_from(ns).ok());
             let labels = meta.labels.into_iter().map(|(k, v)| format!("{k}={v}")).collect();
-            (name, namespace, labels)
+            let annotations = meta.annotations.into_iter().map(|(k, v)| format!("{k}={v}")).collect();
+            (name, namespace, labels, annotations)
         }
-        None => (None, None, Vec::new()),
+        None => (None, None, Vec::new(), Vec::new()),
     };
 
     let configmap_data = if kind.as_str() == "ConfigMap" {
@@ -89,6 +92,7 @@ pub fn parse_k8s_yaml(path: &Utf8Path, content: &str) -> Option<ParsedYaml> {
             name,
             namespace,
             labels,
+            annotations,
         },
         configmap_data,
     })

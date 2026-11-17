@@ -2,12 +2,11 @@
 
 [package]
 name = "blite"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2024"
 rust-version = "1.95"
 
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/colstrom/blite"
 repository = "https://github.com/colstrom/blite"
 authors = ["Chris Olstrom <chris@olstrom.com>"]
 keywords = ["cli", "search"]
@@ -26,7 +25,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 nutype = { version = "0.8.0", features = ["serde"] }
 rayon = "1.12.0"
 regex-lite = "0.1.9"
-rustyline = "19.0.0"
+rustyline = { version = "19.0.0", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde-saphyr = { version = "2.1.1", features = ["miette"] }
 serde_json = "1.0.154"

@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.8.3
+
+### Added
+- **Kubernetes Annotation Indexing (`annotations:`):** Extracted `metadata.annotations` from Kubernetes manifests into `K8sMetadata` and indexed them in Tantivy so queries can filter by `annotations:` alongside `labels:`.
+- **Key-Only & Key-Value Metadata Filtering:** Indexed both bare keys and `key=value` pairs for `labels:` and `annotations:`, allowing queries to match any value for a given key (e.g. `annotations:cert-manager.io/cluster-issuer`) as well as exact `key=value` pairs.
+- **REPL Tab-Completion (`ReplHelper`):** Added interactive tab-completion for `:commands`, field prefixes (`kind:`, `ns:`, `labels:`, `annotations:`), indexed Kubernetes kinds/namespaces, and label/annotation keys and `key=value` pairs (with automatic quoting for special characters and live updates on `:reload`).
+
 ## 0.8.2
 
 ### Added
