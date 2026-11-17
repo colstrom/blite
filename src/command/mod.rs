@@ -57,7 +57,7 @@ pub struct Command {
     #[builder(default = Utf8PathBuf::from("."))]
     pub repo: Utf8PathBuf,
 
-    /// Optional path to the kitchen-sink repository for drift comparison
+    /// Optional path to the kitchen repository for drift comparison
     #[arg(short, long, global = true)]
     pub kitchen: Option<Utf8PathBuf>,
 
@@ -65,6 +65,20 @@ pub struct Command {
     #[arg(short = 'n', long, default_value_t = 5)]
     #[builder(default = 5)]
     pub limit: usize,
+
+    /// Explicit path to the REPL history file
+    #[arg(long, conflicts_with_all = ["repo_history", "no_history"])]
+    pub history_file: Option<Utf8PathBuf>,
+
+    /// Scope REPL history per repository instead of sharing globally
+    #[arg(long, conflicts_with_all = ["history_file", "no_history"])]
+    #[builder(default = false)]
+    pub repo_history: bool,
+
+    /// Disable reading and writing REPL history
+    #[arg(long, conflicts_with_all = ["history_file", "repo_history"])]
+    #[builder(default = false)]
+    pub no_history: bool,
 
     #[command(subcommand)]
     subcommand: Option<Subcommand>,
@@ -115,6 +129,9 @@ impl Command {
                     .repo(self.repo)
                     .maybe_kitchen(self.kitchen)
                     .limit(self.limit)
+                    .maybe_history_file(self.history_file)
+                    .repo_history(self.repo_history)
+                    .no_history(self.no_history)
                     .build()
                     .run()
                     .map_err(CommandError::from)?;

@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.8.2
+
+### Added
+- **Persistent REPL History (`dirs` + `camino`):** Added cross-session command history persistence for interactive mode (`blite` / `blite repl`), defaulting to the platform state/data directory (`blite/history`) with duplicate and leading-space filtering.
+- **Flexible History Scoping Flags:** Added `--repo-history` (deterministic per-repository history files), `--history-file <PATH>` (explicit custom history path), and `--no-history` (for read-only filesystems or ephemeral sessions).
+- **REPL History Visibility:** Displayed the active history path (or `disabled` status) in the interactive startup banner and added the `:history-path` (aliases `:history-file`, `:hp`) session command.
+
 ## 0.8.1
 
 - set MSRV to `1.95`, thanks @ital0sant0s for reporting the build failure on older Rust due to the use of `cfg_select!`.
