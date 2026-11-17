@@ -1,3 +1,5 @@
+// src/render.rs
+
 use miette::Diagnostic;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Style;

@@ -1,3 +1,5 @@
+// src/command/mod.rs
+
 pub mod history;
 pub mod repl;
 pub mod search;

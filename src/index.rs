@@ -1,3 +1,5 @@
+// src/index.rs
+
 use std::sync::Mutex;
 
 use camino::Utf8Path;

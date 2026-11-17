@@ -1,3 +1,5 @@
+// src/types.rs
+
 use camino::Utf8PathBuf;
 use nutype::nutype;
 use serde::Deserialize;

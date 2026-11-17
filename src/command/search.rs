@@ -1,3 +1,5 @@
+// src/command/search.rs
+
 use bon::Builder;
 use camino::Utf8PathBuf;
 use clap::Args;

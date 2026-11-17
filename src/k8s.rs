@@ -1,3 +1,5 @@
+// src/k8s.rs
+
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::OnceLock;
