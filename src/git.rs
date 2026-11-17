@@ -29,8 +29,6 @@ use crate::types::FileCommit;
 use crate::types::RepoRelativePath;
 use crate::types::SearchQuery;
 
-const DEFAULT_MAX_COMMITS: usize = 1_000;
-
 #[derive(Debug, Error, Diagnostic)]
 pub enum GitHistoryError {
     #[error("failed to discover git repository at {path}: {source}")]
@@ -101,7 +99,7 @@ impl GitHistoryIndex {
         let walk = head_id.ancestors().all().map_err(|e| GitHistoryError::Revision(e.to_string()))?;
 
         let mut indexed_count = 0usize;
-        for info in walk.take(DEFAULT_MAX_COMMITS) {
+        for info in walk {
             let Ok(info) = info else { continue };
             let Ok(commit) = info.object() else { continue };
 
@@ -270,7 +268,7 @@ impl FileCommitHistory {
 
         let mut by_path: HashMap<RepoRelativePath, Vec<FileCommit>> = HashMap::new();
 
-        for info in walk.take(DEFAULT_MAX_COMMITS) {
+        for info in walk {
             let Ok(info) = info else { continue };
             let Ok(commit) = info.object() else { continue };
 

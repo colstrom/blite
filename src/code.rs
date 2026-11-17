@@ -21,6 +21,10 @@ enum ScriptKind {
     Rust,
     Ruby,
     Bash,
+    Python,
+    Go,
+    JavaScript,
+    Just,
     FilterScript, // .awk, .jq, .yq
 }
 
@@ -58,6 +62,34 @@ pub fn chunk_code_file(path: &Utf8Path, content: &str) -> Vec<CodeChunk> {
             &["function_definition"],
             &["comment"],
         ),
+        ScriptKind::Python => chunk_with_tree_sitter(
+            content,
+            &lines,
+            tree_sitter_python::LANGUAGE.into(),
+            &["function_definition", "class_definition", "decorated_definition"],
+            &["comment"],
+        ),
+        ScriptKind::Go => chunk_with_tree_sitter(
+            content,
+            &lines,
+            tree_sitter_go::LANGUAGE.into(),
+            &["function_declaration", "method_declaration", "type_declaration"],
+            &["comment"],
+        ),
+        ScriptKind::JavaScript => chunk_with_tree_sitter(
+            content,
+            &lines,
+            tree_sitter_javascript::LANGUAGE.into(),
+            &["function_declaration", "class_declaration", "export_statement"],
+            &["comment"],
+        ),
+        ScriptKind::Just => chunk_with_tree_sitter(
+            content,
+            &lines,
+            tree_sitter_just::LANGUAGE.into(),
+            &["recipe"],
+            &["comment", "attribute"],
+        ),
         ScriptKind::FilterScript => chunk_filter_script(&lines),
     };
 
@@ -66,11 +98,21 @@ pub fn chunk_code_file(path: &Utf8Path, content: &str) -> Vec<CodeChunk> {
 }
 
 fn detect_script_kind(path: &Utf8Path, content: &str) -> Option<ScriptKind> {
+    if let Some(file_name) = path.file_name()
+        && matches!(file_name.to_ascii_lowercase().as_str(), "justfile" | ".justfile")
+    {
+        return Some(ScriptKind::Just);
+    }
+
     if let Some(ext) = path.extension() {
         match ext.to_ascii_lowercase().as_str() {
             "rs" => return Some(ScriptKind::Rust),
             "rb" | "rake" => return Some(ScriptKind::Ruby),
             "sh" | "bash" | "zsh" => return Some(ScriptKind::Bash),
+            "py" | "pyi" => return Some(ScriptKind::Python),
+            "go" => return Some(ScriptKind::Go),
+            "js" | "mjs" | "cjs" => return Some(ScriptKind::JavaScript),
+            "just" => return Some(ScriptKind::Just),
             "awk" | "jq" | "yq" => return Some(ScriptKind::FilterScript),
             _ => {}
         }
@@ -84,6 +126,15 @@ fn detect_script_kind(path: &Utf8Path, content: &str) -> Option<ScriptKind> {
         }
         if shebang.contains("bash") || shebang.ends_with("/sh") || shebang.contains("env sh") {
             return Some(ScriptKind::Bash);
+        }
+        if shebang.contains("python") {
+            return Some(ScriptKind::Python);
+        }
+        if shebang.contains("node") || shebang.contains("deno") || shebang.contains("bun") {
+            return Some(ScriptKind::JavaScript);
+        }
+        if shebang.contains("just") {
+            return Some(ScriptKind::Just);
         }
         if shebang.contains("awk") || shebang.contains("jq") || shebang.contains("yq") {
             return Some(ScriptKind::FilterScript);
@@ -151,8 +202,15 @@ fn chunk_with_tree_sitter(
 }
 
 fn extract_symbol_name(node: Node<'_>, source: &str) -> Option<SymbolName> {
+    // Unwrap Python `@decorator` or JS `export` wrapper nodes to inspect the inner definition
+    let target = match node.kind() {
+        "decorated_definition" => node.child_by_field_name("definition").unwrap_or(node),
+        "export_statement" => node.child_by_field_name("declaration").unwrap_or(node),
+        _ => node,
+    };
+
     // Most tree-sitter grammars expose a `name` field on functions, structs, classes, and modules
-    if let Some(name_node) = node.child_by_field_name("name")
+    if let Some(name_node) = target.child_by_field_name("name")
         && let Ok(text) = name_node.utf8_text(source.as_bytes())
         && let Ok(sym) = SymbolName::try_from(text.to_string())
     {
@@ -160,12 +218,40 @@ fn extract_symbol_name(node: Node<'_>, source: &str) -> Option<SymbolName> {
     }
 
     // For Rust `impl Trait for Type` or `impl Type`, inspect `type` field
-    if node.kind() == "impl_item"
-        && let Some(type_node) = node.child_by_field_name("type")
+    if target.kind() == "impl_item"
+        && let Some(type_node) = target.child_by_field_name("type")
         && let Ok(text) = type_node.utf8_text(source.as_bytes())
         && let Ok(sym) = SymbolName::try_from(text.to_string())
     {
         return Some(sym);
+    }
+
+    // For Go `type Foo struct { ... }` (`type_declaration` -> `type_spec` -> `name`)
+    if target.kind() == "type_declaration" {
+        let mut cursor = target.walk();
+        for child in target.children(&mut cursor) {
+            if child.kind() == "type_spec"
+                && let Some(name_node) = child.child_by_field_name("name")
+                && let Ok(text) = name_node.utf8_text(source.as_bytes())
+                && let Ok(sym) = SymbolName::try_from(text.to_string())
+            {
+                return Some(sym);
+            }
+        }
+    }
+
+    // For Just recipes (`recipe` -> `recipe_header` -> `name`)
+    if target.kind() == "recipe" {
+        let mut cursor = target.walk();
+        for child in target.children(&mut cursor) {
+            if child.kind() == "recipe_header"
+                && let Some(name_node) = child.child_by_field_name("name")
+                && let Ok(text) = name_node.utf8_text(source.as_bytes())
+                && let Ok(sym) = SymbolName::try_from(text.to_string())
+            {
+                return Some(sym);
+            }
+        }
     }
 
     None

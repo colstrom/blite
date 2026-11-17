@@ -1,5 +1,13 @@
 # Change Log
 
+## 0.8.5
+
+### Added
+- **Expanded Tree-Sitter Language Support (`Python`, `Go`, `JavaScript`, `Just`):** Added AST-aware chunking and `symbol:` extraction for `.py`/`.pyi`, `.go`, `.js`/`.mjs`/`.cjs`, and `justfile`/`.just` files (including decorated Python definitions, Go type declarations, JS exports, Just recipes with leading comments and attributes, and shebang detection).
+
+### Fixed
+- **Full Git Commit History Traversal:** Removed the `DEFAULT_MAX_COMMITS` (1,000-commit) walk limit in `FileCommitHistory` and `GitHistoryIndex` (and ensured strict newest-to-oldest timestamp ordering) so files and history queries capture all commits across multi-thousand-commit repositories.
+
 ## 0.8.4
 
 ### Added
