@@ -26,8 +26,10 @@ use tracing::info;
 use crate::drift::KitchenComparator;
 use crate::git::FileCommitHistory;
 use crate::git::GitHistoryIndex;
+use crate::index::IndexBuildOptions;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
+use crate::index::SemanticMode;
 use crate::render::RenderError;
 use crate::render::TerminalRenderer;
 use crate::types::SearchQuery;
@@ -75,6 +77,48 @@ pub struct ReplCommand {
     #[arg(long, conflicts_with_all = ["history_file", "repo_history"])]
     #[builder(default = false)]
     pub no_history: bool,
+
+    /// Require hybrid semantic search (fails with setup instructions if no model is installed)
+    #[arg(long, conflicts_with = "lexical")]
+    #[builder(default = false)]
+    pub semantic: bool,
+
+    /// Force lexical BM25 search only, even when an embedding model is configured
+    #[arg(long, conflicts_with = "semantic")]
+    #[builder(default = false)]
+    pub lexical: bool,
+
+    /// Path to a local embedding model directory (containing config.json, tokenizer.json, model.safetensors)
+    #[arg(
+        long,
+        env = "BLITE_MODEL_DIR",
+        long_help = "Path to a local embedding model directory.\n\n\
+                     Must follow the same layout produced by `blite models download`:\n\
+                     - config.json (HuggingFace BertModel or NomicBertModel config)\n\
+                     - tokenizer.json (HuggingFace fast tokenizer file)\n\
+                     - model.safetensors (Safetensors weights)"
+    )]
+    pub model_dir: Option<Utf8PathBuf>,
+
+    /// Allow reading models from the local HuggingFace Hub cache (`~/.cache/huggingface/hub`)
+    #[arg(long, env = "BLITE_USE_HF_CACHE")]
+    #[builder(default = false)]
+    pub use_hf_cache: bool,
+
+    /// Include `vendor/` directories when indexing repository files
+    #[arg(long)]
+    #[builder(default = false)]
+    pub include_vendor: bool,
+
+    /// Include untracked files when indexing a Git repository
+    #[arg(long)]
+    #[builder(default = false)]
+    pub untracked: bool,
+
+    /// Disable reading and writing the on-disk embedding vector cache
+    #[arg(long)]
+    #[builder(default = false)]
+    pub no_cache: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -259,7 +303,25 @@ impl ReplCommand {
 
     pub fn run(self) -> Result<serde_json::Value, ReplError> {
         let start = Instant::now();
-        let mut index = RepoIndex::build_from_dir(&self.repo)?;
+        let semantic_mode = if self.semantic {
+            SemanticMode::Require
+        } else if self.lexical {
+            SemanticMode::Off
+        } else {
+            SemanticMode::Auto
+        };
+
+        let build_opts = IndexBuildOptions::builder()
+            .semantic_mode(semantic_mode)
+            .maybe_model_dir(self.model_dir.clone())
+            .allow_hf_cache(self.use_hf_cache)
+            .include_vendor(self.include_vendor)
+            .include_untracked(self.untracked)
+            .no_cache(self.no_cache)
+            .show_progress(true)
+            .build();
+
+        let mut index = RepoIndex::build_with_options(&self.repo, &build_opts)?;
         let mut git_index: Option<GitHistoryIndex> = None;
         let mut file_history: Option<FileCommitHistory> = None;
         let renderer = TerminalRenderer::new();
@@ -290,10 +352,16 @@ impl ReplCommand {
             None => "disabled",
         };
 
+        let semantic_status = match index.active_semantic_info() {
+            Some((model, device)) => format!("{model} on {device}"),
+            None => "lexical only".to_string(),
+        };
+
         eprintln!(
-            "\x1b[1;32mIndexed {}\x1b[0m in {:.0?} \x1b[2m(history: {})\x1b[0m\nType :help for commands, :exit to quit",
+            "\x1b[1;32mIndexed {}\x1b[0m in {:.0?} \x1b[2m(search: {}, history: {})\x1b[0m\nType :help for commands, :exit to quit",
             self.repo,
             start.elapsed(),
+            semantic_status,
             history_status,
         );
 
@@ -318,7 +386,7 @@ impl ReplCommand {
                         }
                         ReplAction::Reload => {
                             let reload_start = Instant::now();
-                            match RepoIndex::build_from_dir(&self.repo) {
+                            match RepoIndex::build_with_options(&self.repo, &build_opts) {
                                 Ok(new_index) => {
                                     index = new_index;
                                     if let Some(helper) = rl.helper_mut() {

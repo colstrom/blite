@@ -1,16 +1,24 @@
 // src/command/mod.rs
 
+pub mod diagnostics;
 pub mod history;
+pub mod models;
 pub mod repl;
 pub mod search;
 
 use bon::Builder;
 use camino::Utf8PathBuf;
 use clap::Parser;
+use diagnostics::DiagnosticsCommand;
+use diagnostics::DiagnosticsError;
+use diagnostics::render_diagnostics;
 use history::HistoryCommand;
 use history::HistoryError;
 use history::HistoryPayload;
 use miette::Diagnostic;
+use models::ModelsCommand;
+use models::ModelsError;
+use models::render_models_table;
 use repl::ReplCommand;
 use repl::ReplError;
 use search::SearchCommand;
@@ -25,10 +33,16 @@ use crate::render::TerminalRenderer;
 #[error(transparent)]
 pub enum CommandError {
     #[diagnostic(transparent)]
+    Diagnostics(#[from] DiagnosticsError),
+
+    #[diagnostic(transparent)]
     Search(#[from] SearchError),
 
     #[diagnostic(transparent)]
     History(#[from] HistoryError),
+
+    #[diagnostic(transparent)]
+    Models(#[from] ModelsError),
 
     #[diagnostic(transparent)]
     Repl(#[from] ReplError),
@@ -80,16 +94,62 @@ pub struct Command {
     #[builder(default = false)]
     pub no_history: bool,
 
+    /// Require hybrid semantic search (fails with setup instructions if no model is installed)
+    #[arg(long, conflicts_with = "lexical")]
+    #[builder(default = false)]
+    pub semantic: bool,
+
+    /// Force lexical BM25 search only, even when an embedding model is configured
+    #[arg(long, conflicts_with = "semantic")]
+    #[builder(default = false)]
+    pub lexical: bool,
+
+    /// Path to a local embedding model directory (containing config.json, tokenizer.json, model.safetensors)
+    #[arg(
+        long,
+        env = "BLITE_MODEL_DIR",
+        long_help = "Path to a local embedding model directory.\n\n\
+                     Must follow the same layout produced by `blite models download`:\n\
+                     - config.json (HuggingFace BertModel or NomicBertModel config)\n\
+                     - tokenizer.json (HuggingFace fast tokenizer file)\n\
+                     - model.safetensors (Safetensors weights)"
+    )]
+    pub model_dir: Option<Utf8PathBuf>,
+
+    /// Allow reading models from the local HuggingFace Hub cache (`~/.cache/huggingface/hub`)
+    #[arg(long, env = "BLITE_USE_HF_CACHE")]
+    #[builder(default = false)]
+    pub use_hf_cache: bool,
+
+    /// Include `vendor/` directories when indexing repository files
+    #[arg(long)]
+    #[builder(default = false)]
+    pub include_vendor: bool,
+
+    /// Include untracked files when indexing a Git repository
+    #[arg(long)]
+    #[builder(default = false)]
+    pub untracked: bool,
+
+    /// Disable reading and writing the on-disk embedding vector cache
+    #[arg(long)]
+    #[builder(default = false)]
+    pub no_cache: bool,
+
     #[command(subcommand)]
     subcommand: Option<Subcommand>,
 }
 
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum Subcommand {
-    /// Search manifests, scripts, and docs using lexical BM25 ranking
+    /// Search manifests, scripts, and docs using lexical BM25 and optional semantic ranking
     Search(SearchCommand),
     /// Search Git commit history, authors, and touched file paths
     History(HistoryCommand),
+    /// Manage local embedding models and HuggingFace cache consent
+    Models(ModelsCommand),
+    /// Inspect repository chunk sizes, token counts, truncation, and batch padding
+    Diagnostics(DiagnosticsCommand),
     /// Launch an interactive search session with a hot in-memory index
     Repl(ReplCommand),
 }
@@ -99,6 +159,14 @@ impl Command {
         match self.subcommand {
             Some(Subcommand::Search(mut cmd)) => {
                 cmd.kitchen = cmd.kitchen.or(self.kitchen);
+                cmd.semantic = cmd.semantic || self.semantic;
+                cmd.lexical = cmd.lexical || self.lexical;
+                cmd.model_dir = cmd.model_dir.or(self.model_dir);
+                cmd.use_hf_cache = cmd.use_hf_cache || self.use_hf_cache;
+                cmd.include_vendor = cmd.include_vendor || self.include_vendor;
+                cmd.untracked = cmd.untracked || self.untracked;
+                cmd.no_cache = cmd.no_cache || self.no_cache;
+
                 if self.json {
                     let value = cmd.run().map_err(CommandError::from)?;
                     println!("{}", serde_json::to_string_pretty(&value)?);
@@ -120,8 +188,37 @@ impl Command {
                     print!("{rendered}");
                 }
             }
+            Some(Subcommand::Models(cmd)) => {
+                if self.json {
+                    let value = cmd.run().map_err(CommandError::from)?;
+                    println!("{}", serde_json::to_string_pretty(&value)?);
+                } else {
+                    let payload = cmd.execute().map_err(CommandError::from)?;
+                    print!("{}", render_models_table(&payload));
+                }
+            }
+            Some(Subcommand::Diagnostics(mut cmd)) => {
+                cmd.model_dir = cmd.model_dir.or(self.model_dir);
+                cmd.include_vendor = cmd.include_vendor || self.include_vendor;
+                cmd.untracked = cmd.untracked || self.untracked;
+                cmd.use_hf_cache = cmd.use_hf_cache || self.use_hf_cache;
+                if self.json {
+                    let value = cmd.run().map_err(CommandError::from)?;
+                    println!("{}", serde_json::to_string_pretty(&value)?);
+                } else {
+                    let payload = cmd.execute().map_err(CommandError::from)?;
+                    print!("{}", render_diagnostics(&payload));
+                }
+            }
             Some(Subcommand::Repl(mut cmd)) => {
                 cmd.kitchen = cmd.kitchen.or(self.kitchen);
+                cmd.semantic = cmd.semantic || self.semantic;
+                cmd.lexical = cmd.lexical || self.lexical;
+                cmd.model_dir = cmd.model_dir.or(self.model_dir);
+                cmd.use_hf_cache = cmd.use_hf_cache || self.use_hf_cache;
+                cmd.include_vendor = cmd.include_vendor || self.include_vendor;
+                cmd.untracked = cmd.untracked || self.untracked;
+                cmd.no_cache = cmd.no_cache || self.no_cache;
                 cmd.run().map_err(CommandError::from)?;
             }
             None => {
@@ -132,6 +229,13 @@ impl Command {
                     .maybe_history_file(self.history_file)
                     .repo_history(self.repo_history)
                     .no_history(self.no_history)
+                    .semantic(self.semantic)
+                    .lexical(self.lexical)
+                    .maybe_model_dir(self.model_dir)
+                    .use_hf_cache(self.use_hf_cache)
+                    .include_vendor(self.include_vendor)
+                    .untracked(self.untracked)
+                    .no_cache(self.no_cache)
                     .build()
                     .run()
                     .map_err(CommandError::from)?;

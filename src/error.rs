@@ -10,6 +10,12 @@ pub enum Error {
     Command(#[from] crate::command::CommandError),
 
     #[diagnostic(transparent)]
+    Config(#[from] crate::config::ConfigError),
+
+    #[diagnostic(transparent)]
+    Embed(#[from] crate::embed::EmbedError),
+
+    #[diagnostic(transparent)]
     Index(#[from] crate::index::IndexError),
 
     #[diagnostic(transparent)]

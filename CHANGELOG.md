@@ -1,5 +1,16 @@
 # Change Log
 
+## 0.9.0
+
+### Added
+- **Hybrid Semantic & Lexical Search (`candle` + `instant-distance`):** Added local neural embedding search fused with Tantivy BM25 rankings via Reciprocal Rank Fusion (RRF), with automatic Apple Metal acceleration on macOS and CPU execution on Linux.
+- **Curated Multi-Origin Embedding Model Catalog (`blite models`):** Added `blite models` (`list`, `info`, `download`, `use`, `hf-cache`) featuring 6 models across EU, US, and CN origins (`mxbai-xsmall`, `mxbai-large`, `granite-30m`, `arctic-xs`, `nomic-v1.5`, `bge-small`) with origin, license, architecture, speed, and compliance notes, plus support for custom local model directories (`--model-dir`).
+- **Multi-Format Configuration & Explicit Cache Consent (`src/config.rs`):** Added automatic config discovery (`YAML` → `JSON` → `TOML`), app-owned model storage (`<data_local_dir>/blite/models/`), and opt-in consent (`allow_hf_cache` / `--use-hf-cache`) before reading from `~/.cache/huggingface/hub`.
+- **Content-Addressed Embedding Vector Cache:** Cached computed document embeddings on disk (`<cache_dir>/blite/embeddings/`) keyed by model and content hash (with `--no-cache` opt-out), reducing warm indexing time from ~21s to ~1s.
+- **Git-Tracked & Ignore-Aware Repository Filtering:** Defaulted repository indexing to Git-tracked files (`gix` index) with `--untracked` opt-in, skipped `vendor/` directories by default (`--include-vendor` opt-in), and added `.bliteignore` + global `<config_dir>/blite/ignore` support.
+- **Multi-Document YAML Splitting (`---`):** Split multi-document YAML streams (such as Flux `gotk-components.yaml`) into individual Kubernetes resources with 1-based line ranges.
+- **Repository Diagnostics Subcommand (`blite diagnostics`):** Added `blite diagnostics` to inspect chunk counts, byte sizes, exact token counts, truncation, multi-document YAML splits, and per-batch padding.
+
 ## 0.8.5
 
 ### Added

@@ -12,6 +12,7 @@ use crate::types::K8sKind;
 use crate::types::K8sMetadata;
 use crate::types::K8sName;
 use crate::types::K8sNamespace;
+use crate::types::LineRange;
 use crate::types::ResolvedVar;
 use crate::types::VarResolutionSource;
 
@@ -40,6 +41,102 @@ struct RawObjectMeta {
 pub struct ParsedYaml {
     pub metadata: K8sMetadata,
     pub configmap_data: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedYamlDocument {
+    pub parsed: ParsedYaml,
+    pub content: String,
+    pub lines: Option<LineRange>,
+    pub doc_index: usize,
+    pub is_multi_doc: bool,
+}
+
+/// Splits a YAML stream on top-level `---` document markers and parses each
+/// Kubernetes resource along with its 1-based line range.
+pub fn parse_k8s_yaml_documents(path: &Utf8Path, content: &str) -> Vec<ParsedYamlDocument> {
+    let Some(ext) = path.extension() else {
+        return Vec::new();
+    };
+    if !ext.eq_ignore_ascii_case("yaml") && !ext.eq_ignore_ascii_case("yml") {
+        return Vec::new();
+    }
+
+    let raw_lines: Vec<&str> = content.lines().collect();
+    if raw_lines.is_empty() {
+        return Vec::new();
+    }
+
+    // Find 0-based line indices where a top-level `---` separator begins a document
+    let mut doc_starts: Vec<usize> = Vec::new();
+    for (idx, line) in raw_lines.iter().enumerate() {
+        let trimmed = line.trim_end();
+        if trimmed == "---" || trimmed.starts_with("--- ") {
+            doc_starts.push(idx);
+        }
+    }
+
+    // Single-document YAML (no `---` or only a single leading `---`)
+    if doc_starts.len() <= 1 {
+        return match parse_k8s_yaml(path, content) {
+            Some(parsed) => vec![ParsedYamlDocument {
+                parsed,
+                content: content.to_string(),
+                lines: None,
+                doc_index: 0,
+                is_multi_doc: false,
+            }],
+            None => Vec::new(),
+        };
+    }
+
+    // Build `(start_row, end_row_inclusive)` spans for each document in the stream
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    if doc_starts[0] > 0 {
+        let first_end = doc_starts[0] - 1;
+        if raw_lines[..=first_end]
+            .iter()
+            .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+        {
+            spans.push((0, first_end));
+        }
+    }
+
+    for (i, &start) in doc_starts.iter().enumerate() {
+        let end = if i + 1 < doc_starts.len() {
+            doc_starts[i + 1] - 1
+        } else {
+            raw_lines.len() - 1
+        };
+        if start <= end {
+            spans.push((start, end));
+        }
+    }
+
+    let is_multi = spans.len() > 1;
+    let mut results = Vec::with_capacity(spans.len());
+
+    for (doc_idx, (start_row, end_row)) in spans.into_iter().enumerate() {
+        let slice = raw_lines[start_row..=end_row].join("\n");
+        if let Some(parsed) = parse_k8s_yaml(path, &slice) {
+            results.push(ParsedYamlDocument {
+                parsed,
+                content: slice,
+                lines: if is_multi {
+                    Some(LineRange {
+                        start: start_row + 1,
+                        end: end_row + 1,
+                    })
+                } else {
+                    None
+                },
+                doc_index: doc_idx,
+                is_multi_doc: is_multi,
+            });
+        }
+    }
+
+    results
 }
 
 fn json_scalar_to_string(val: serde_json::Value) -> Option<String> {

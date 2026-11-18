@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
@@ -326,4 +327,43 @@ impl FileCommitHistory {
     pub fn commits_for(&self, path: &RepoRelativePath) -> &[FileCommit] {
         self.by_path.get(path).map_or(&[], Vec::as_slice)
     }
+}
+
+/// Returns the set of `RepoRelativePath` entries currently tracked in the Git index
+/// under `root`, or `None` if `root` is not inside a Git repository or has no index yet.
+pub fn collect_tracked_paths(root: impl AsRef<Utf8Path>) -> Option<HashSet<RepoRelativePath>> {
+    let root = root.as_ref();
+    let repo = gix::discover(root.as_std_path()).ok()?;
+    let index = repo.index().ok()?;
+
+    let repo_prefix: Option<Utf8PathBuf> = repo.workdir().and_then(|wd| Utf8Path::from_path(wd)).and_then(|wd| {
+        root.canonicalize_utf8().ok().and_then(|r| {
+            wd.canonicalize_utf8()
+                .ok()
+                .and_then(|w| r.strip_prefix(&w).ok().map(ToOwned::to_owned))
+        })
+    });
+
+    let mut tracked = HashSet::with_capacity(index.entries().len());
+    for entry in index.entries() {
+        let raw_path = entry.path(&index).to_str_lossy();
+        if raw_path.is_empty() {
+            continue;
+        }
+        let repo_rel = Utf8PathBuf::from(raw_path.into_owned());
+
+        let normalized = match &repo_prefix {
+            Some(prefix) if !prefix.as_str().is_empty() => {
+                let Ok(stripped) = repo_rel.strip_prefix(prefix) else {
+                    continue;
+                };
+                RepoRelativePath::from(stripped.to_path_buf())
+            }
+            _ => RepoRelativePath::from(repo_rel),
+        };
+
+        tracked.insert(normalized);
+    }
+
+    if tracked.is_empty() { None } else { Some(tracked) }
 }

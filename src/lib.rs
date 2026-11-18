@@ -2,7 +2,9 @@
 
 pub mod code;
 pub mod command;
+pub mod config;
 pub mod drift;
+pub mod embed;
 pub mod error;
 pub mod git;
 pub mod index;
