@@ -1,3 +1,5 @@
+// src/config.rs
+
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use miette::Diagnostic;
