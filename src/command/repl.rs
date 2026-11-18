@@ -23,13 +23,15 @@ use thiserror::Error;
 use tracing::debug;
 use tracing::info;
 
+use super::args::IndexFilterArgs;
+use super::args::ReplHistoryArgs;
+use super::args::RepoTargetArgs;
+use super::args::SemanticArgs;
 use crate::drift::KitchenComparator;
 use crate::git::FileCommitHistory;
 use crate::git::GitHistoryIndex;
-use crate::index::IndexBuildOptions;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
-use crate::index::SemanticMode;
 use crate::render::RenderError;
 use crate::render::TerminalRenderer;
 use crate::types::SearchQuery;
@@ -50,13 +52,12 @@ pub enum ReplError {
 
 #[derive(Debug, Clone, Args, Builder)]
 pub struct ReplCommand {
-    /// Path to the target repository root
-    #[arg(short, long, default_value = ".")]
-    #[builder(default = Utf8PathBuf::from("."))]
-    pub repo: Utf8PathBuf,
+    #[command(flatten)]
+    #[builder(default)]
+    pub target: RepoTargetArgs,
 
     /// Optional path to the kitchen repository for drift comparison
-    #[arg(skip)]
+    #[arg(short, long)]
     pub kitchen: Option<Utf8PathBuf>,
 
     /// Maximum number of matching documents to return per query
@@ -64,61 +65,23 @@ pub struct ReplCommand {
     #[builder(default = 5)]
     pub limit: usize,
 
-    /// Explicit path to the REPL history file
-    #[arg(long, conflicts_with_all = ["repo_history", "no_history"])]
-    pub history_file: Option<Utf8PathBuf>,
+    #[command(flatten)]
+    #[builder(default)]
+    pub history: ReplHistoryArgs,
 
-    /// Scope REPL history per repository instead of sharing globally
-    #[arg(long, conflicts_with_all = ["history_file", "no_history"])]
-    #[builder(default = false)]
-    pub repo_history: bool,
+    #[command(flatten)]
+    #[builder(default)]
+    pub semantic: SemanticArgs,
 
-    /// Disable reading and writing REPL history
-    #[arg(long, conflicts_with_all = ["history_file", "repo_history"])]
-    #[builder(default = false)]
-    pub no_history: bool,
+    #[command(flatten)]
+    #[builder(default)]
+    pub filter: IndexFilterArgs,
+}
 
-    /// Require hybrid semantic search (fails with setup instructions if no model is installed)
-    #[arg(long, conflicts_with = "lexical")]
-    #[builder(default = false)]
-    pub semantic: bool,
-
-    /// Force lexical BM25 search only, even when an embedding model is configured
-    #[arg(long, conflicts_with = "semantic")]
-    #[builder(default = false)]
-    pub lexical: bool,
-
-    /// Path to a local embedding model directory (containing config.json, tokenizer.json, model.safetensors)
-    #[arg(
-        long,
-        env = "BLITE_MODEL_DIR",
-        long_help = "Path to a local embedding model directory.\n\n\
-                     Must follow the same layout produced by `blite models download`:\n\
-                     - config.json (HuggingFace BertModel or NomicBertModel config)\n\
-                     - tokenizer.json (HuggingFace fast tokenizer file)\n\
-                     - model.safetensors (Safetensors weights)"
-    )]
-    pub model_dir: Option<Utf8PathBuf>,
-
-    /// Allow reading models from the local HuggingFace Hub cache (`~/.cache/huggingface/hub`)
-    #[arg(long, env = "BLITE_USE_HF_CACHE")]
-    #[builder(default = false)]
-    pub use_hf_cache: bool,
-
-    /// Include `vendor/` directories when indexing repository files
-    #[arg(long)]
-    #[builder(default = false)]
-    pub include_vendor: bool,
-
-    /// Include untracked files when indexing a Git repository
-    #[arg(long)]
-    #[builder(default = false)]
-    pub untracked: bool,
-
-    /// Disable reading and writing the on-disk embedding vector cache
-    #[arg(long)]
-    #[builder(default = false)]
-    pub no_cache: bool,
+impl Default for ReplCommand {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -290,12 +253,12 @@ fn format_query_value(val: &str) -> String {
 
 impl ReplCommand {
     fn history_target(&self) -> HistoryTarget {
-        if self.no_history {
+        if self.history.no_history {
             HistoryTarget::Disabled
-        } else if let Some(path) = &self.history_file {
+        } else if let Some(path) = &self.history.history_file {
             HistoryTarget::Custom(path.clone())
-        } else if self.repo_history {
-            HistoryTarget::RepoScoped(self.repo.clone())
+        } else if self.history.repo_history {
+            HistoryTarget::RepoScoped(self.target.repo.clone())
         } else {
             HistoryTarget::Global
         }
@@ -303,29 +266,13 @@ impl ReplCommand {
 
     pub fn run(self) -> Result<serde_json::Value, ReplError> {
         let start = Instant::now();
-        let semantic_mode = if self.semantic {
-            SemanticMode::Require
-        } else if self.lexical {
-            SemanticMode::Off
-        } else {
-            SemanticMode::Auto
-        };
+        let build_opts = self.semantic.to_build_options(&self.filter, true);
 
-        let build_opts = IndexBuildOptions::builder()
-            .semantic_mode(semantic_mode)
-            .maybe_model_dir(self.model_dir.clone())
-            .allow_hf_cache(self.use_hf_cache)
-            .include_vendor(self.include_vendor)
-            .include_untracked(self.untracked)
-            .no_cache(self.no_cache)
-            .show_progress(true)
-            .build();
-
-        let mut index = RepoIndex::build_with_options(&self.repo, &build_opts)?;
+        let mut index = RepoIndex::build_with_options(&self.target.repo, &build_opts)?;
         let mut git_index: Option<GitHistoryIndex> = None;
         let mut file_history: Option<FileCommitHistory> = None;
         let renderer = TerminalRenderer::new();
-        let comparator = self.kitchen.as_ref().map(|k| KitchenComparator::new(&self.repo, k));
+        let comparator = self.kitchen.as_ref().map(|k| KitchenComparator::new(&self.target.repo, k));
         let mut limit = self.limit;
 
         let rl_config = Config::builder()
@@ -359,7 +306,7 @@ impl ReplCommand {
 
         eprintln!(
             "\x1b[1;32mIndexed {}\x1b[0m in {:.0?} \x1b[2m(search: {}, history: {})\x1b[0m\nType :help for commands, :exit to quit",
-            self.repo,
+            self.target.repo,
             start.elapsed(),
             semantic_status,
             history_status,
@@ -386,7 +333,7 @@ impl ReplCommand {
                         }
                         ReplAction::Reload => {
                             let reload_start = Instant::now();
-                            match RepoIndex::build_with_options(&self.repo, &build_opts) {
+                            match RepoIndex::build_with_options(&self.target.repo, &build_opts) {
                                 Ok(new_index) => {
                                     index = new_index;
                                     if let Some(helper) = rl.helper_mut() {
@@ -405,7 +352,7 @@ impl ReplCommand {
                         ReplAction::History(query) => {
                             if git_index.is_none() {
                                 let git_start = Instant::now();
-                                match GitHistoryIndex::build_from_dir(&self.repo) {
+                                match GitHistoryIndex::build_from_dir(&self.target.repo) {
                                     Ok(built) => {
                                         eprintln!("\x1b[2mIndexed git history in {:.0?}.\x1b[0m", git_start.elapsed());
                                         git_index = Some(built);
@@ -435,7 +382,7 @@ impl ReplCommand {
                         },
                         ReplAction::Search(query) => {
                             let query_start = Instant::now();
-                            let history = file_history.get_or_insert_with(|| FileCommitHistory::build_from_dir(&self.repo));
+                            let history = file_history.get_or_insert_with(|| FileCommitHistory::build_from_dir(&self.target.repo));
                             match index.search(&query, limit) {
                                 Ok(mut hits) => {
                                     for hit in &mut hits {

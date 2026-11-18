@@ -1,3 +1,5 @@
+// src/command/embeddings.rs
+
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -10,6 +12,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+use super::args::IndexFilterArgs;
+use super::args::RepoTargetArgs;
 use crate::config::AppConfig;
 use crate::config::ConfigError;
 use crate::embed::EMBED_BATCH_SIZE;
@@ -68,10 +72,9 @@ pub enum EmbeddingsAction {
 
 #[derive(Debug, Clone, Args, Builder)]
 pub struct EmbeddingsBuildArgs {
-    /// Path to the target repository root
-    #[arg(short, long, default_value = ".")]
-    #[builder(default = Utf8PathBuf::from("."))]
-    pub repo: Utf8PathBuf,
+    #[command(flatten)]
+    #[builder(default)]
+    pub target: RepoTargetArgs,
 
     /// Model ID or local model directory path (defaults to the active model in config)
     #[arg(short, long)]
@@ -87,23 +90,16 @@ pub struct EmbeddingsBuildArgs {
     #[builder(default = false)]
     pub use_hf_cache: bool,
 
-    /// Include `vendor/` directories when indexing repository files
-    #[arg(long)]
-    #[builder(default = false)]
-    pub include_vendor: bool,
-
-    /// Include untracked files when indexing a Git repository
-    #[arg(long)]
-    #[builder(default = false)]
-    pub untracked: bool,
+    #[command(flatten)]
+    #[builder(default)]
+    pub filter: IndexFilterArgs,
 }
 
 #[derive(Debug, Clone, Args, Builder)]
 pub struct EmbeddingsPruneArgs {
-    /// Path to the target repository root whose live chunks should be kept
-    #[arg(short, long, default_value = ".")]
-    #[builder(default = Utf8PathBuf::from("."))]
-    pub repo: Utf8PathBuf,
+    #[command(flatten)]
+    #[builder(default)]
+    pub target: RepoTargetArgs,
 
     /// Model ID or local model directory path (defaults to the active model in config)
     #[arg(short, long, conflicts_with = "all")]
@@ -119,15 +115,9 @@ pub struct EmbeddingsPruneArgs {
     #[builder(default = false)]
     pub use_hf_cache: bool,
 
-    /// Include `vendor/` directories when scanning live repository files
-    #[arg(long)]
-    #[builder(default = false)]
-    pub include_vendor: bool,
-
-    /// Include untracked files when scanning a Git repository
-    #[arg(long)]
-    #[builder(default = false)]
-    pub untracked: bool,
+    #[command(flatten)]
+    #[builder(default)]
+    pub filter: IndexFilterArgs,
 }
 
 #[derive(Debug, Clone, Args, Builder)]
@@ -223,7 +213,7 @@ fn resolve_target_model(model_arg: Option<&str>, allow_hf_cache: bool) -> Result
 fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
     let start = Instant::now();
     let resolved = resolve_target_model(args.model.as_deref(), args.use_hf_cache)?;
-    let docs = collect_documents_for_diagnostics(&args.repo, args.include_vendor, args.untracked)?;
+    let docs = collect_documents_for_diagnostics(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
 
     let embedder = Embedder::load(&resolved)?;
     let cache_path = embedding_cache_path(&resolved.label);
@@ -286,7 +276,7 @@ fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayload, Embedd
 }
 
 fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
-    let docs = collect_documents_for_diagnostics(&args.repo, args.include_vendor, args.untracked)?;
+    let docs = collect_documents_for_diagnostics(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
     let mut removed_entries = 0usize;
     let mut removed_files = 0usize;
     let mut model_label = None;

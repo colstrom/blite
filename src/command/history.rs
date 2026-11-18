@@ -1,13 +1,13 @@
 // src/command/history.rs
 
 use bon::Builder;
-use camino::Utf8PathBuf;
 use clap::Args;
 use miette::Diagnostic;
 use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+use super::args::RepoTargetArgs;
 use crate::git::GitHistoryError;
 use crate::git::GitHistoryIndex;
 use crate::types::CommitHit;
@@ -28,10 +28,9 @@ pub struct HistoryCommand {
     /// Query string to search across commit messages, authors, and touched paths
     pub query: SearchQuery,
 
-    /// Path to the target repository root
-    #[arg(short, long, default_value = ".")]
-    #[builder(default = Utf8PathBuf::from("."))]
-    pub repo: Utf8PathBuf,
+    #[command(flatten)]
+    #[builder(default)]
+    pub target: RepoTargetArgs,
 
     /// Maximum number of matching commits to return
     #[arg(short = 'n', long, default_value_t = 10)]
@@ -48,7 +47,7 @@ pub struct HistoryPayload {
 
 impl HistoryCommand {
     pub fn execute(&self) -> Result<HistoryPayload, HistoryError> {
-        let index = GitHistoryIndex::build_from_dir(&self.repo)?;
+        let index = GitHistoryIndex::build_from_dir(&self.target.repo)?;
         let hits = index.search(&self.query, self.limit)?;
 
         Ok(HistoryPayload {
