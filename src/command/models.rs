@@ -60,8 +60,17 @@ pub enum ModelsAction {
     /// Deactivate the currently selected embedding model and revert default search to lexical-only
     #[command(visible_aliases = ["off", "clear", "none"])]
     Disable,
+    /// Remove a downloaded model from blite's local models directory
+    #[command(visible_aliases = ["rm", "delete", "uninstall"])]
+    Remove(ModelRemoveArgs),
     /// Explicitly allow or disallow reading from the local HuggingFace Hub cache
     HfCache(HfCacheArgs),
+}
+
+#[derive(Debug, Clone, Args, Builder)]
+pub struct ModelRemoveArgs {
+    /// Curated model ID to remove from blite's local models directory
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Args, Builder)]
@@ -215,6 +224,37 @@ impl ModelsCommand {
                         "No active embedding model was configured in {} (default search is already lexical-only).",
                         cfg_path
                     );
+                }
+
+                build_models_payload(None)
+            }
+            ModelsAction::Remove(args) => {
+                let spec = find_model_spec(&args.model).ok_or_else(|| EmbedError::UnknownModel(args.model.clone()))?;
+
+                let model_dir = AppConfig::models_dir()?.join(spec.id);
+                if model_dir.exists() {
+                    fs_err::remove_dir_all(&model_dir)?;
+                    eprintln!("Removed model directory {}", model_dir);
+                } else {
+                    eprintln!("Model '{}' is not installed in {}", spec.id, model_dir);
+                }
+
+                if let Some(cache_file) = crate::embed::embedding_cache_path(spec.id)
+                    && cache_file.exists()
+                {
+                    fs_err::remove_file(&cache_file)?;
+                    eprintln!("Removed embedding cache {}", cache_file);
+                }
+
+                let mut config = AppConfig::load()?;
+                if config
+                    .active_model
+                    .as_deref()
+                    .is_some_and(|active| active.eq_ignore_ascii_case(spec.id))
+                {
+                    config.active_model = None;
+                    let cfg_path = config.save()?;
+                    eprintln!("Deactivated '{}' in {}", spec.id, cfg_path);
                 }
 
                 build_models_payload(None)

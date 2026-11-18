@@ -1,6 +1,7 @@
 // src/command/mod.rs
 
 pub mod diagnostics;
+pub mod embeddings;
 pub mod history;
 pub mod models;
 pub mod repl;
@@ -12,6 +13,8 @@ use clap::Parser;
 use diagnostics::DiagnosticsCommand;
 use diagnostics::DiagnosticsError;
 use diagnostics::render_diagnostics;
+use embeddings::EmbeddingsCommand;
+use embeddings::EmbeddingsError;
 use history::HistoryCommand;
 use history::HistoryError;
 use history::HistoryPayload;
@@ -43,6 +46,9 @@ pub enum CommandError {
 
     #[diagnostic(transparent)]
     Models(#[from] ModelsError),
+
+    #[diagnostic(transparent)]
+    Embeddings(#[from] EmbeddingsError),
 
     #[diagnostic(transparent)]
     Repl(#[from] ReplError),
@@ -148,6 +154,8 @@ pub enum Subcommand {
     History(HistoryCommand),
     /// Manage local embedding models and HuggingFace cache consent
     Models(ModelsCommand),
+    /// Build, prune, or clear cached embedding vectors
+    Embeddings(EmbeddingsCommand),
     /// Inspect repository chunk sizes, token counts, truncation, and batch padding
     Diagnostics(DiagnosticsCommand),
     /// Launch an interactive search session with a hot in-memory index
@@ -195,6 +203,12 @@ impl Command {
                 } else {
                     let payload = cmd.execute().map_err(CommandError::from)?;
                     print!("{}", render_models_table(&payload));
+                }
+            }
+            Some(Subcommand::Embeddings(cmd)) => {
+                let value = cmd.run().map_err(CommandError::from)?;
+                if self.json {
+                    println!("{}", serde_json::to_string_pretty(&value)?);
                 }
             }
             Some(Subcommand::Diagnostics(mut cmd)) => {

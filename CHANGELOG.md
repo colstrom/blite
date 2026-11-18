@@ -1,5 +1,11 @@
 # Change Log
 
+## 0.9.1
+
+### Added
+- **Model Deactivation & Removal (`blite models disable` & `remove`):** Added `blite models disable` (aliases `off`, `clear`, `none`) to clear the active model in config and revert default search to lexical-only, and `blite models remove <id>` (aliases `rm`, `delete`, `uninstall`) to delete downloaded model files and cached embeddings from disk.
+- **Embedding Vector Cache Management (`blite embeddings`):** Added `blite embeddings build` (pre-warms or `--force` rebuilds cached vectors for a repository), `blite embeddings prune` (evicts stale vectors for files/chunks no longer in a target repo), and `blite embeddings clear` (deletes cached vector files per model or `--all`).
+
 ## 0.9.0
 
 ### Added

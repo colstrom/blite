@@ -590,22 +590,6 @@ fn hash_embed_text(prefix: &str, text: &str) -> u64 {
     hash
 }
 
-fn cache_file_path(model_label: &str) -> Option<Utf8PathBuf> {
-    let base = dirs::cache_dir()?;
-    let cache_dir = Utf8PathBuf::try_from(base).ok()?.join("blite").join("embeddings");
-    let safe_name: String = model_label
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    Some(cache_dir.join(format!("{safe_name}.bin")))
-}
-
 fn load_embedding_cache(path: &Utf8Path) -> HashMap<u64, Vec<f32>> {
     let Ok(bytes) = fs_err::read(path) else {
         return HashMap::new();
@@ -696,7 +680,7 @@ impl SemanticIndex {
         let embedder = Embedder::load(resolved)?;
         let device_label = embedder.device_label();
 
-        let cache_path = if use_cache { cache_file_path(&resolved.label) } else { None };
+        let cache_path = if use_cache { embedding_cache_path(&resolved.label) } else { None };
         let mut cache = cache_path.as_deref().map(load_embedding_cache).unwrap_or_default();
 
         let mut vectors = vec![Vec::new(); docs.len()];
@@ -756,4 +740,40 @@ impl SemanticIndex {
             .map(|item| (*item.value, (1.0 - item.distance).clamp(-1.0, 1.0)))
             .collect())
     }
+}
+
+pub fn embedding_cache_dir() -> Option<Utf8PathBuf> {
+    let base = dirs::cache_dir()?;
+    Utf8PathBuf::try_from(base).ok().map(|dir| dir.join("blite").join("embeddings"))
+}
+
+pub fn embedding_cache_path(model_label: &str) -> Option<Utf8PathBuf> {
+    let cache_dir = embedding_cache_dir()?;
+    let safe_name: String = model_label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Some(cache_dir.join(format!("{safe_name}.bin")))
+}
+
+pub fn hash_doc_with_prefix(prefix: &str, text: &str, max_tokens: usize) -> u64 {
+    hash_embed_text(prefix, truncate_for_tokenizer(text, max_tokens))
+}
+
+pub fn compute_doc_embed_hash(embedder: &Embedder, text: &str) -> u64 {
+    hash_doc_with_prefix(&embedder.doc_prefix, text, embedder.max_tokens())
+}
+
+pub fn read_embedding_cache(path: &Utf8Path) -> HashMap<u64, Vec<f32>> {
+    load_embedding_cache(path)
+}
+
+pub fn write_embedding_cache(path: &Utf8Path, entries: &HashMap<u64, Vec<f32>>) {
+    save_embedding_cache(path, entries);
 }
