@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use super::args::IndexFilterArgs;
 use super::args::RepoTargetArgs;
+use super::args::SemanticArgs;
 use crate::config::AppConfig;
 use crate::embed::EMBED_BATCH_SIZE;
 use crate::embed::EmbedError;
@@ -43,14 +44,9 @@ pub struct DiagnosticsCommand {
     #[builder(default = 25)]
     pub top: usize,
 
-    /// Path to a local embedding model directory
-    #[arg(long, env = "BLITE_MODEL_DIR")]
-    pub model_dir: Option<Utf8PathBuf>,
-
-    /// Allow reading models from the local HuggingFace Hub cache
-    #[arg(long, env = "BLITE_USE_HF_CACHE")]
-    #[builder(default = false)]
-    pub use_hf_cache: bool,
+    #[command(flatten)]
+    #[builder(default)]
+    pub semantic: SemanticArgs,
 
     #[command(flatten)]
     #[builder(default)]
@@ -93,8 +89,8 @@ impl DiagnosticsCommand {
         let resolved = resolve_active_model(
             &cfg,
             &ModelResolveOptions {
-                override_model_dir: self.model_dir.clone(),
-                allow_hf_cache_override: self.use_hf_cache,
+                override_model_dir: self.semantic.model_dir.clone(),
+                allow_hf_cache_override: self.semantic.use_hf_cache,
             },
         )?;
 
