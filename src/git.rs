@@ -53,6 +53,116 @@ pub enum GitHistoryError {
     QueryParse(#[from] tantivy::query::QueryParserError),
 }
 
+struct WalkedCommit {
+    oid: CommitOid,
+    short_oid: String,
+    author: String,
+    timestamp: i64,
+    message: String,
+    touched_paths: Vec<RepoRelativePath>,
+}
+
+fn compute_repo_prefix(repo: &gix::Repository, root: &Utf8Path) -> Option<Utf8PathBuf> {
+    repo.workdir()
+        .and_then(Utf8Path::from_path)
+        .and_then(|wd| {
+            let canonical_root = root.canonicalize_utf8().ok()?;
+            let canonical_wd = wd.canonicalize_utf8().ok()?;
+            canonical_root.strip_prefix(&canonical_wd).ok().map(ToOwned::to_owned)
+        })
+        .filter(|prefix| !prefix.as_str().is_empty())
+}
+
+fn normalize_repo_path(path: Utf8PathBuf, repo_prefix: Option<&Utf8Path>) -> Option<RepoRelativePath> {
+    match repo_prefix {
+        Some(prefix) => path
+            .strip_prefix(prefix)
+            .ok()
+            .map(|stripped| RepoRelativePath::from(stripped.to_path_buf())),
+        None => Some(RepoRelativePath::from(path)),
+    }
+}
+
+fn walk_repo_commits(root: &Utf8Path, normalize_prefix: bool) -> Result<Vec<WalkedCommit>, GitHistoryError> {
+    let repo = gix::discover(root.as_std_path()).map_err(|source| GitHistoryError::Discover {
+        path: root.to_path_buf(),
+        source,
+    })?;
+
+    let Ok(head_id) = repo.head_id() else {
+        return Ok(Vec::new());
+    };
+
+    let walk = head_id.ancestors().all().map_err(|e| GitHistoryError::Revision(e.to_string()))?;
+    let repo_prefix = if normalize_prefix { compute_repo_prefix(&repo, root) } else { None };
+
+    let mut commits = Vec::new();
+    for info in walk {
+        let Ok(info) = info else { continue };
+        let Ok(commit) = info.object() else { continue };
+
+        let oid_str = commit.id.to_string();
+        let Ok(oid) = CommitOid::try_from(oid_str.clone()) else {
+            continue;
+        };
+        let short_oid = oid_str.chars().take(8).collect();
+        let message = commit.message_raw_sloppy().to_str_lossy().into_owned();
+        let (author, timestamp) = match commit.author() {
+            Ok(sig) => {
+                let ts = sig
+                    .time()
+                    .map(|t| t.seconds)
+                    .unwrap_or_else(|_| sig.time.split_whitespace().next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0));
+                (format!("{} <{}>", sig.name.to_str_lossy(), sig.email.to_str_lossy()), ts)
+            }
+            Err(_) => ("unknown".to_string(), 0),
+        };
+
+        let touched_paths = collect_commit_paths(&repo, &commit, repo_prefix.as_deref());
+        commits.push(WalkedCommit {
+            oid,
+            short_oid,
+            author,
+            timestamp,
+            message,
+            touched_paths,
+        });
+    }
+
+    Ok(commits)
+}
+
+fn collect_commit_paths(repo: &gix::Repository, commit: &gix::Commit<'_>, repo_prefix: Option<&Utf8Path>) -> Vec<RepoRelativePath> {
+    let Ok(new_tree) = commit.tree() else {
+        return Vec::new();
+    };
+
+    let old_tree = commit
+        .parent_ids()
+        .next()
+        .and_then(|parent_id| parent_id.object().ok())
+        .and_then(|obj| obj.try_into_commit().ok())
+        .and_then(|parent_commit| parent_commit.tree().ok())
+        .unwrap_or_else(|| repo.empty_tree());
+
+    let paths = RefCell::new(Vec::new());
+    let Ok(mut changes) = old_tree.changes() else {
+        return Vec::new();
+    };
+
+    let _ = changes.for_each_to_obtain_tree(&new_tree, |change| {
+        let loc = change.location().to_str_lossy();
+        if !loc.is_empty()
+            && let Some(normalized) = normalize_repo_path(Utf8PathBuf::from(loc.into_owned()), repo_prefix)
+        {
+            paths.borrow_mut().push(normalized);
+        }
+        Ok::<_, gix::Error>(Action::Continue(()))
+    });
+
+    paths.into_inner()
+}
+
 pub struct GitHistoryIndex {
     index: Index,
     oid_field: Field,
@@ -63,15 +173,12 @@ pub struct GitHistoryIndex {
 }
 
 impl GitHistoryIndex {
-    /// Opens the Git repository at `root` and indexes up to `DEFAULT_MAX_COMMITS`
-    /// commits (messages + touched paths) into an in-memory Tantivy index.
+    /// Opens the Git repository at `root` and indexes commit messages, authors,
+    /// and touched paths into an in-memory Tantivy index.
     #[instrument(skip_all, fields(root = %root.as_ref()))]
     pub fn build_from_dir(root: impl AsRef<Utf8Path>) -> Result<Self, GitHistoryError> {
         let root = root.as_ref();
-        let repo = gix::discover(root.as_std_path()).map_err(|source| GitHistoryError::Discover {
-            path: root.to_path_buf(),
-            source,
-        })?;
+        let commits = walk_repo_commits(root, false)?;
 
         let mut schema_builder = Schema::builder();
         let oid_field = schema_builder.add_text_field("oid", TEXT | STORED);
@@ -83,53 +190,18 @@ impl GitHistoryIndex {
 
         let index = Index::create_in_ram(schema);
         let mut writer = index.writer(15_000_000)?;
+        let indexed_count = commits.len();
 
-        let Ok(head_id) = repo.head_id() else {
-            // Empty/unborn repository with zero commits
-            writer.commit()?;
-            return Ok(Self {
-                index,
-                oid_field,
-                author_field,
-                timestamp_field,
-                message_field,
-                paths_field,
-            });
-        };
-
-        let walk = head_id.ancestors().all().map_err(|e| GitHistoryError::Revision(e.to_string()))?;
-
-        let mut indexed_count = 0usize;
-        for info in walk {
-            let Ok(info) = info else { continue };
-            let Ok(commit) = info.object() else { continue };
-
-            let oid_str = commit.id.to_string();
-            let message = commit.message_raw_sloppy().to_str_lossy().into_owned();
-            let (author, timestamp) = match commit.author() {
-                Ok(sig) => {
-                    let ts = sig
-                        .time()
-                        .map(|t| t.seconds)
-                        .unwrap_or_else(|_| sig.time.split_whitespace().next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0));
-                    (format!("{} <{}>", sig.name.to_str_lossy(), sig.email.to_str_lossy()), ts)
-                }
-                Err(_) => ("unknown".to_string(), 0),
-            };
-
-            let touched_paths = collect_commit_paths(&repo, &commit);
-
+        for commit in commits {
             let mut doc = TantivyDocument::new();
-            doc.add_text(oid_field, &oid_str);
-            doc.add_text(author_field, &author);
-            doc.add_i64(timestamp_field, timestamp);
-            doc.add_text(message_field, &message);
-            for path in &touched_paths {
+            doc.add_text(oid_field, commit.oid.as_str());
+            doc.add_text(author_field, &commit.author);
+            doc.add_i64(timestamp_field, commit.timestamp);
+            doc.add_text(message_field, &commit.message);
+            for path in &commit.touched_paths {
                 doc.add_text(paths_field, path.as_str());
             }
-
             writer.add_document(doc)?;
-            indexed_count += 1;
         }
 
         writer.commit()?;
@@ -205,119 +277,39 @@ impl GitHistoryIndex {
     }
 }
 
-fn collect_commit_paths(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Vec<RepoRelativePath> {
-    let Ok(new_tree) = commit.tree() else {
-        return Vec::new();
-    };
-
-    let old_tree = commit
-        .parent_ids()
-        .next()
-        .and_then(|parent_id| parent_id.object().ok())
-        .and_then(|obj| obj.try_into_commit().ok())
-        .and_then(|parent_commit| parent_commit.tree().ok())
-        .unwrap_or_else(|| repo.empty_tree());
-
-    let paths = RefCell::new(Vec::new());
-    let Ok(mut changes) = old_tree.changes() else {
-        return Vec::new();
-    };
-
-    let _ = changes.for_each_to_obtain_tree(&new_tree, |change| {
-        let loc = change.location().to_str_lossy();
-        if !loc.is_empty() {
-            paths.borrow_mut().push(RepoRelativePath::from(Utf8PathBuf::from(loc.into_owned())));
-        }
-        Ok::<_, gix::Error>(Action::Continue(()))
-    });
-
-    paths.into_inner()
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct FileCommitHistory {
     by_path: HashMap<RepoRelativePath, Vec<FileCommit>>,
 }
 
 impl FileCommitHistory {
-    /// Walks up to `DEFAULT_MAX_COMMITS` from `HEAD` (newest to oldest) and maps
-    /// each touched `RepoRelativePath` to the ordered commits that modified it.
+    /// Walks commits from `HEAD` (newest to oldest) and maps each touched
+    /// `RepoRelativePath` to the ordered commits that modified it.
     /// Returns an empty map if `root` is not inside a Git repository.
     #[instrument(skip_all, fields(root = %root.as_ref()))]
     pub fn build_from_dir(root: impl AsRef<Utf8Path>) -> Self {
-        let root = root.as_ref();
-        let Ok(repo) = gix::discover(root.as_std_path()) else {
+        let Ok(commits) = walk_repo_commits(root.as_ref(), true) else {
             return Self::default();
         };
-
-        let Ok(head_id) = repo.head_id() else {
-            return Self::default();
-        };
-
-        let Ok(walk) = head_id.ancestors().all() else {
-            return Self::default();
-        };
-
-        // Compute prefix if `root` is a subdirectory of the git workdir
-        let repo_prefix: Option<Utf8PathBuf> = repo.workdir().and_then(|wd| Utf8Path::from_path(wd)).and_then(|wd| {
-            root.canonicalize_utf8().ok().and_then(|r| {
-                wd.canonicalize_utf8()
-                    .ok()
-                    .and_then(|w| r.strip_prefix(&w).ok().map(ToOwned::to_owned))
-            })
-        });
 
         let mut by_path: HashMap<RepoRelativePath, Vec<FileCommit>> = HashMap::new();
-
-        for info in walk {
-            let Ok(info) = info else { continue };
-            let Ok(commit) = info.object() else { continue };
-
-            let oid_str = commit.id.to_string();
-            let Ok(oid) = CommitOid::try_from(oid_str.clone()) else {
-                continue;
-            };
-            let short_oid = oid_str.chars().take(8).collect();
-
-            let raw_msg = commit.message_raw_sloppy().to_str_lossy();
-            let subject = raw_msg.lines().next().unwrap_or_default().trim().to_string();
-
-            let (author, timestamp) = match commit.author() {
-                Ok(sig) => {
-                    let ts = sig
-                        .time()
-                        .map(|t| t.seconds)
-                        .unwrap_or_else(|_| sig.time.split_whitespace().next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0));
-                    (format!("{} <{}>", sig.name.to_str_lossy(), sig.email.to_str_lossy()), ts)
-                }
-                Err(_) => ("unknown".to_string(), 0),
-            };
-
-            let committed_at = Timestamp::from_second(timestamp)
+        for commit in commits {
+            let subject = commit.message.lines().next().unwrap_or_default().trim().to_string();
+            let committed_at = Timestamp::from_second(commit.timestamp)
                 .map(|ts| ts.to_string())
                 .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string());
 
             let file_commit = FileCommit {
-                oid,
-                short_oid,
+                oid: commit.oid,
+                short_oid: commit.short_oid,
                 committed_at,
-                timestamp,
-                author,
+                timestamp: commit.timestamp,
+                author: commit.author,
                 subject,
             };
 
-            for touched in collect_commit_paths(&repo, &commit) {
-                let normalized = match &repo_prefix {
-                    Some(prefix) if !prefix.as_str().is_empty() => {
-                        let Ok(stripped) = touched.as_path().strip_prefix(prefix) else {
-                            continue;
-                        };
-                        RepoRelativePath::from(stripped.to_path_buf())
-                    }
-                    _ => touched,
-                };
-
-                by_path.entry(normalized).or_default().push(file_commit.clone());
+            for path in commit.touched_paths {
+                by_path.entry(path).or_default().push(file_commit.clone());
             }
         }
 
@@ -335,14 +327,7 @@ pub fn collect_tracked_paths(root: impl AsRef<Utf8Path>) -> Option<HashSet<RepoR
     let root = root.as_ref();
     let repo = gix::discover(root.as_std_path()).ok()?;
     let index = repo.index().ok()?;
-
-    let repo_prefix: Option<Utf8PathBuf> = repo.workdir().and_then(|wd| Utf8Path::from_path(wd)).and_then(|wd| {
-        root.canonicalize_utf8().ok().and_then(|r| {
-            wd.canonicalize_utf8()
-                .ok()
-                .and_then(|w| r.strip_prefix(&w).ok().map(ToOwned::to_owned))
-        })
-    });
+    let repo_prefix = compute_repo_prefix(&repo, root);
 
     let mut tracked = HashSet::with_capacity(index.entries().len());
     for entry in index.entries() {
@@ -350,19 +335,9 @@ pub fn collect_tracked_paths(root: impl AsRef<Utf8Path>) -> Option<HashSet<RepoR
         if raw_path.is_empty() {
             continue;
         }
-        let repo_rel = Utf8PathBuf::from(raw_path.into_owned());
-
-        let normalized = match &repo_prefix {
-            Some(prefix) if !prefix.as_str().is_empty() => {
-                let Ok(stripped) = repo_rel.strip_prefix(prefix) else {
-                    continue;
-                };
-                RepoRelativePath::from(stripped.to_path_buf())
-            }
-            _ => RepoRelativePath::from(repo_rel),
-        };
-
-        tracked.insert(normalized);
+        if let Some(normalized) = normalize_repo_path(Utf8PathBuf::from(raw_path.into_owned()), repo_prefix.as_deref()) {
+            tracked.insert(normalized);
+        }
     }
 
     if tracked.is_empty() { None } else { Some(tracked) }
