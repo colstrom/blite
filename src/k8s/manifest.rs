@@ -189,3 +189,108 @@ pub fn parse_k8s_yaml(path: &Utf8Path, content: &str) -> Option<ParsedYaml> {
         configmap_data,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8Path;
+
+    use super::parse_k8s_yaml;
+    use super::parse_k8s_yaml_documents;
+    use crate::types::LineRange;
+
+    #[test]
+    fn parses_single_k8s_manifest_with_metadata() {
+        let yaml = "\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: prod
+  labels:
+    app: web
+  annotations:
+    example.com/test: \"true\"
+spec:
+  replicas: 2
+";
+        let docs = parse_k8s_yaml_documents(Utf8Path::new("apps/web.yaml"), yaml);
+        assert_eq!(docs.len(), 1);
+
+        let doc = docs.first().unwrap();
+        assert!(!doc.is_multi_doc);
+        assert_eq!(doc.lines, None);
+        assert_eq!(doc.parsed.metadata.kind.as_ref(), "Deployment");
+        assert_eq!(doc.parsed.metadata.name.as_deref(), Some("web"));
+        assert_eq!(doc.parsed.metadata.namespace.as_deref(), Some("prod"));
+        assert_eq!(doc.parsed.metadata.labels, vec!["app=web"]);
+        assert_eq!(doc.parsed.metadata.annotations, vec!["example.com/test=true"]);
+    }
+
+    #[test]
+    fn splits_multi_doc_stream_with_accurate_line_ranges() {
+        let stream = "\
+# leading comment before first separator
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: media
+---
+# non-k8s document that should be skipped
+foo: bar
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: media
+";
+        let docs = parse_k8s_yaml_documents(Utf8Path::new("apps/media.yml"), stream);
+        assert_eq!(docs.len(), 2);
+
+        let first = docs.first().unwrap();
+        assert_eq!(first.parsed.metadata.kind.as_ref(), "Namespace");
+        assert_eq!(first.parsed.metadata.name.as_deref(), Some("media"));
+        assert_eq!(first.lines, Some(LineRange { start: 2, end: 6 }));
+        assert!(first.is_multi_doc);
+
+        let second = docs.get(1).unwrap();
+        assert_eq!(second.parsed.metadata.kind.as_ref(), "Service");
+        assert_eq!(second.parsed.metadata.name.as_deref(), Some("jellyfin"));
+        assert_eq!(second.lines, Some(LineRange { start: 10, end: 15 }));
+        assert!(second.is_multi_doc);
+    }
+
+    #[test]
+    fn merges_configmap_data_and_coerces_scalars() {
+        let yaml = "\
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: settings
+  namespace: flux-system
+data:
+  DOMAIN: example.com
+  RETRIES: 3
+  ENABLED: true
+  EMPTY_VAL: null
+stringData:
+  OVERRIDE: from-string-data
+";
+        let parsed = parse_k8s_yaml(Utf8Path::new("cm.yaml"), yaml).expect("valid ConfigMap");
+        let data = parsed.configmap_data.expect("populated configmap data");
+
+        assert_eq!(data.get("DOMAIN").map(String::as_str), Some("example.com"));
+        assert_eq!(data.get("RETRIES").map(String::as_str), Some("3"));
+        assert_eq!(data.get("ENABLED").map(String::as_str), Some("true"));
+        assert_eq!(data.get("EMPTY_VAL").map(String::as_str), Some(""));
+        assert_eq!(data.get("OVERRIDE").map(String::as_str), Some("from-string-data"));
+    }
+
+    #[test]
+    fn ignores_non_yaml_extensions() {
+        let yaml = "kind: ConfigMap\nmetadata:\n  name: ignored\n";
+        assert!(parse_k8s_yaml(Utf8Path::new("cm.json"), yaml).is_none());
+        assert!(parse_k8s_yaml_documents(Utf8Path::new("cm.txt"), yaml).is_empty());
+    }
+}
