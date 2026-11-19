@@ -92,9 +92,7 @@ impl SubstitutionTable {
             (Some(":+"), Some(alt), Some((val, source))) if !val.is_empty() => (Some(alt.to_string()), source),
             (Some("+"), Some(alt), Some((_, source))) => (Some(alt.to_string()), source),
             (Some(":-" | ":="), Some(default_val), None) => (Some(default_val.to_string()), VarResolutionSource::InlineDefault),
-            (Some(":-" | ":="), Some(default_val), Some((val, _))) if val.is_empty() => {
-                (Some(default_val.to_string()), VarResolutionSource::InlineDefault)
-            }
+            (Some(":-" | ":="), Some(default_val), Some(("", _))) => (Some(default_val.to_string()), VarResolutionSource::InlineDefault),
             (Some("-" | "="), Some(default_val), None) => (Some(default_val.to_string()), VarResolutionSource::InlineDefault),
             (_, _, Some((val, source))) => (Some(val.to_string()), source),
             (_, _, None) => (None, VarResolutionSource::Unresolved),

@@ -116,8 +116,8 @@ pub fn read_embedding_cache(path: &Utf8Path) -> HashMap<u64, Vec<f32>> {
     for chunk in payload.chunks_exact(record_bytes) {
         let hash = u64::from_le_bytes(chunk[0..8].try_into().unwrap_or_default());
         let mut vec = Vec::with_capacity(dims);
-        for f_bytes in chunk[8..].chunks_exact(4) {
-            vec.push(f32::from_le_bytes(f_bytes.try_into().unwrap_or_default()));
+        for f_bytes in chunk[8..].as_chunks::<4>().0 {
+            vec.push(f32::from_le_bytes(*f_bytes));
         }
         map.insert(hash, vec);
     }
