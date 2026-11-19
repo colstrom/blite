@@ -1,5 +1,8 @@
 // src/embed/resolve.rs
 
+use std::fmt;
+use std::ops::Deref;
+
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
 
@@ -11,35 +14,83 @@ use crate::config::AppConfig;
 
 pub const REQUIRED_MODEL_FILES: &[&str] = &["config.json", "tokenizer.json", "model.safetensors"];
 
-pub fn validate_model_dir(dir: &Utf8Path) -> Result<(), EmbedError> {
-    for file in REQUIRED_MODEL_FILES {
-        if !dir.join(file).is_file() {
-            return Err(EmbedError::IncompleteModelDir {
-                path: dir.to_path_buf(),
-                missing: (*file).to_string(),
-            });
-        }
+/// A model directory verified to contain `config.json`, `tokenizer.json`, and `model.safetensors`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedModelDir(Utf8PathBuf);
+
+impl ValidatedModelDir {
+    pub fn into_inner(self) -> Utf8PathBuf {
+        self.0
     }
-    Ok(())
+}
+
+impl AsRef<Utf8Path> for ValidatedModelDir {
+    fn as_ref(&self) -> &Utf8Path {
+        &self.0
+    }
+}
+
+impl Deref for ValidatedModelDir {
+    type Target = Utf8Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for ValidatedModelDir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<ValidatedModelDir> for Utf8PathBuf {
+    fn from(dir: ValidatedModelDir) -> Self {
+        dir.0
+    }
+}
+
+impl TryFrom<Utf8PathBuf> for ValidatedModelDir {
+    type Error = EmbedError;
+
+    fn try_from(dir: Utf8PathBuf) -> Result<Self, Self::Error> {
+        for file in REQUIRED_MODEL_FILES {
+            if !dir.join(file).is_file() {
+                return Err(EmbedError::IncompleteModelDir {
+                    path: dir,
+                    missing: (*file).to_string(),
+                });
+            }
+        }
+        Ok(Self(dir))
+    }
+}
+
+impl TryFrom<&Utf8Path> for ValidatedModelDir {
+    type Error = EmbedError;
+
+    fn try_from(dir: &Utf8Path) -> Result<Self, Self::Error> {
+        Self::try_from(dir.to_path_buf())
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum ModelSource {
-    AppDir(Utf8PathBuf),
-    HfCache(Utf8PathBuf),
+    AppDir(ValidatedModelDir),
+    HfCache(ValidatedModelDir),
 }
 
 impl ModelSource {
     pub fn into_path(self) -> Utf8PathBuf {
         match self {
-            Self::AppDir(path) | Self::HfCache(path) => path,
+            Self::AppDir(dir) | Self::HfCache(dir) => dir.into_inner(),
         }
     }
 
     pub fn into_resolved(self, spec: &ModelSpec) -> ResolvedModel {
         let (label, dir) = match self {
-            Self::AppDir(path) => (spec.id.to_string(), path),
-            Self::HfCache(path) => (format!("{} (hf-cache)", spec.id), path),
+            Self::AppDir(dir) => (spec.id.to_string(), dir),
+            Self::HfCache(dir) => (format!("{} (hf-cache)", spec.id), dir),
         };
         ResolvedModel {
             label,
@@ -51,11 +102,10 @@ impl ModelSource {
 }
 
 pub fn locate_curated_model(spec: &ModelSpec, allow_hf_cache: bool) -> Option<ModelSource> {
-    if let Ok(models_dir) = AppConfig::models_dir() {
-        let app_dir = models_dir.join(spec.id);
-        if app_dir.is_dir() && validate_model_dir(&app_dir).is_ok() {
-            return Some(ModelSource::AppDir(app_dir));
-        }
+    if let Ok(models_dir) = AppConfig::models_dir()
+        && let Ok(app_dir) = ValidatedModelDir::try_from(models_dir.join(spec.id))
+    {
+        return Some(ModelSource::AppDir(app_dir));
     }
 
     if allow_hf_cache && let Some(hf_dir) = probe_hf_cache_snapshot(spec.hf_repo) {
@@ -68,7 +118,7 @@ pub fn locate_curated_model(spec: &ModelSpec, allow_hf_cache: bool) -> Option<Mo
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
     pub label: String,
-    pub dir: Utf8PathBuf,
+    pub dir: ValidatedModelDir,
     pub query_prefix: String,
     pub doc_prefix: String,
 }
@@ -81,11 +131,11 @@ pub struct ModelResolveOptions {
 
 pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> Result<Option<ResolvedModel>, EmbedError> {
     if let Some(dir) = &opts.override_model_dir {
-        validate_model_dir(dir)?;
-        let (query_prefix, doc_prefix) = infer_prefixes_from_dir(dir);
+        let validated = ValidatedModelDir::try_from(dir.as_path())?;
+        let (query_prefix, doc_prefix) = infer_prefixes_from_dir(&validated);
         return Ok(Some(ResolvedModel {
-            label: dir.to_string(),
-            dir: dir.clone(),
+            label: validated.to_string(),
+            dir: validated,
             query_prefix,
             doc_prefix,
         }));
@@ -93,11 +143,11 @@ pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> R
 
     if let Some(dir) = &config.active_model_path {
         if dir.is_dir() {
-            validate_model_dir(dir)?;
-            let (query_prefix, doc_prefix) = infer_prefixes_from_dir(dir);
+            let validated = ValidatedModelDir::try_from(dir.as_path())?;
+            let (query_prefix, doc_prefix) = infer_prefixes_from_dir(&validated);
             return Ok(Some(ResolvedModel {
-                label: dir.to_string(),
-                dir: dir.clone(),
+                label: validated.to_string(),
+                dir: validated,
                 query_prefix,
                 doc_prefix,
             }));
@@ -110,20 +160,19 @@ pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> R
     };
 
     let hf_consented = opts.allow_hf_cache_override || config.allow_hf_cache;
-    if let Some(spec) = find_model_spec(model_id) {
+    if let Some(spec) = find_model_spec(model_id.as_str()) {
         return Ok(locate_curated_model(spec, hf_consented).map(|src| src.into_resolved(spec)));
     }
 
-    if let Ok(models_root) = AppConfig::models_dir() {
-        let local_dir = models_root.join(model_id);
-        if local_dir.is_dir() && validate_model_dir(&local_dir).is_ok() {
-            return Ok(Some(ResolvedModel {
-                label: model_id.clone(),
-                dir: local_dir,
-                query_prefix: String::new(),
-                doc_prefix: String::new(),
-            }));
-        }
+    if let Ok(models_root) = AppConfig::models_dir()
+        && let Ok(local_dir) = ValidatedModelDir::try_from(models_root.join(model_id.as_str()))
+    {
+        return Ok(Some(ResolvedModel {
+            label: model_id.to_string(),
+            dir: local_dir,
+            query_prefix: String::new(),
+            doc_prefix: String::new(),
+        }));
     }
 
     Ok(None)
@@ -164,7 +213,7 @@ pub fn resolve_model_target(target: Option<&str>, allow_hf_cache: bool) -> Resul
     .ok_or(EmbedError::ModelUnavailable)
 }
 
-pub fn probe_hf_cache_snapshot(hf_repo: &str) -> Option<Utf8PathBuf> {
+pub fn probe_hf_cache_snapshot(hf_repo: &str) -> Option<ValidatedModelDir> {
     let hub_dir = std::env::var("HF_HOME")
         .ok()
         .map(|h| Utf8PathBuf::from(h).join("hub"))
@@ -182,8 +231,8 @@ pub fn probe_hf_cache_snapshot(hf_repo: &str) -> Option<Utf8PathBuf> {
         let Ok(path) = Utf8PathBuf::try_from(entry.path()) else {
             continue;
         };
-        if path.is_dir() && validate_model_dir(&path).is_ok() {
-            return Some(path);
+        if let Ok(validated) = ValidatedModelDir::try_from(path) {
+            return Some(validated);
         }
     }
 

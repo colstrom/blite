@@ -36,11 +36,11 @@ pub use resolve::ModelResolveOptions;
 pub use resolve::ModelSource;
 pub use resolve::REQUIRED_MODEL_FILES;
 pub use resolve::ResolvedModel;
+pub use resolve::ValidatedModelDir;
 pub use resolve::locate_curated_model;
 pub use resolve::probe_hf_cache_snapshot;
 pub use resolve::resolve_active_model;
 pub use resolve::resolve_model_target;
-pub use resolve::validate_model_dir;
 use serde::Deserialize;
 use tokenizers::PaddingParams;
 use tokenizers::Tokenizer;
@@ -111,8 +111,6 @@ pub struct Embedder {
 impl Embedder {
     #[instrument(skip_all, fields(model = %resolved.label, dir = %resolved.dir))]
     pub fn load(resolved: &ResolvedModel) -> Result<Self, EmbedError> {
-        validate_model_dir(&resolved.dir)?;
-
         let device = select_device();
         let config_str = fs_err::read_to_string(resolved.dir.join("config.json"))?;
         let probe: RawArchProbe = serde_json::from_str(&config_str)?;

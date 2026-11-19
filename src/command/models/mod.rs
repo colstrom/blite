@@ -5,6 +5,7 @@ mod exec;
 use bon::Builder;
 use clap::Args;
 use clap::Subcommand;
+use clap::ValueEnum;
 pub use exec::ModelEntryPayload;
 pub use exec::ModelsPayload;
 use miette::Diagnostic;
@@ -96,11 +97,17 @@ pub struct ModelUseArgs {
     pub allow_hf_cache: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum HfCacheConsent {
+    Enable,
+    Disable,
+}
+
 #[derive(Debug, Clone, Args, Builder)]
 pub struct HfCacheArgs {
     /// Set to `enable` to allow probing `~/.cache/huggingface/hub`, or `disable` to forbid it
-    #[arg(value_parser = ["enable", "disable"])]
-    pub consent: String,
+    #[arg(value_enum)]
+    pub consent: HfCacheConsent,
 }
 
 impl ModelsCommand {

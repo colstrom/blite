@@ -7,6 +7,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::types::ModelId;
+
 #[derive(Debug, Error, Diagnostic)]
 pub enum ConfigError {
     #[error("failed to read or write configuration file")]
@@ -49,7 +51,7 @@ pub enum ConfigFormat {
 pub struct AppConfig {
     /// Curated model ID (e.g. `granite-30m`, `mxbai-xsmall`, `nomic-v1.5`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_model: Option<String>,
+    pub active_model: Option<ModelId>,
 
     /// Explicit path to a user-provided local model directory
     #[serde(default, skip_serializing_if = "Option::is_none")]

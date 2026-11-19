@@ -1,15 +1,14 @@
 // src/embed/download.rs
 
-use camino::Utf8PathBuf;
 use hf_hub::HFClientSync;
 
 use super::EmbedError;
 use super::ModelSpec;
 use super::REQUIRED_MODEL_FILES;
-use super::validate_model_dir;
+use super::ValidatedModelDir;
 use crate::config::AppConfig;
 
-pub fn download_curated_model(spec: &ModelSpec) -> Result<Utf8PathBuf, EmbedError> {
+pub fn download_curated_model(spec: &ModelSpec) -> Result<ValidatedModelDir, EmbedError> {
     let dest_dir = AppConfig::models_dir()?.join(spec.id);
     fs_err::create_dir_all(&dest_dir)?;
 
@@ -31,7 +30,7 @@ pub fn download_curated_model(spec: &ModelSpec) -> Result<Utf8PathBuf, EmbedErro
             .map_err(|e| EmbedError::HfHub(format!("failed to download '{filename}': {e}")))?;
     }
 
-    validate_model_dir(&dest_dir)?;
-    eprintln!("\x1b[1;32mInstalled {}\x1b[0m at {}", spec.id, dest_dir);
-    Ok(dest_dir)
+    let validated = ValidatedModelDir::try_from(dest_dir)?;
+    eprintln!("\x1b[1;32mInstalled {}\x1b[0m at {}", spec.id, validated);
+    Ok(validated)
 }

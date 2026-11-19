@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::HfCacheArgs;
+use super::HfCacheConsent;
 use super::ModelDownloadArgs;
 use super::ModelInfoArgs;
 use super::ModelRemoveArgs;
@@ -16,15 +17,16 @@ use super::ModelsError;
 use crate::config::AppConfig;
 use crate::embed::EmbedError;
 use crate::embed::MODEL_CATALOG;
+use crate::embed::ValidatedModelDir;
 use crate::embed::download_curated_model;
 use crate::embed::embedding_cache_path;
 use crate::embed::find_model_spec;
 use crate::embed::locate_curated_model;
-use crate::embed::validate_model_dir;
+use crate::types::ModelId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelEntryPayload {
-    pub id: String,
+    pub id: ModelId,
     pub hf_repo: String,
     pub origin: String,
     pub license: String,
@@ -46,7 +48,7 @@ pub struct ModelEntryPayload {
 pub struct ModelsPayload {
     pub models_dir: Utf8PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_model: Option<String>,
+    pub active_model: Option<ModelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_model_path: Option<Utf8PathBuf>,
     pub allow_hf_cache: bool,
@@ -78,7 +80,7 @@ fn execute_download(args: &ModelDownloadArgs) -> Result<ModelsPayload, ModelsErr
 
     let mut config = AppConfig::load()?;
     if !args.no_activate {
-        config.active_model = Some(spec.id.to_string());
+        config.active_model = ModelId::try_from(spec.id.to_string()).ok();
         config.active_model_path = None;
         let cfg_path = config.save()?;
         eprintln!("Activated '{}' in {}", spec.id, cfg_path);
@@ -92,8 +94,8 @@ fn execute_use(args: &ModelUseArgs) -> Result<ModelsPayload, ModelsError> {
     let candidate_path = Utf8Path::new(&args.target);
 
     if candidate_path.is_dir() {
-        validate_model_dir(candidate_path)?;
-        let canonical = candidate_path.canonicalize_utf8().unwrap_or_else(|_| candidate_path.to_path_buf());
+        let validated = ValidatedModelDir::try_from(candidate_path)?;
+        let canonical = validated.canonicalize_utf8().unwrap_or_else(|_| validated.into_inner());
         config.active_model_path = Some(canonical.clone());
         config.active_model = None;
         let cfg_path = config.save()?;
@@ -114,7 +116,7 @@ fn execute_use(args: &ModelUseArgs) -> Result<ModelsPayload, ModelsError> {
         );
     }
 
-    config.active_model = Some(spec.id.to_string());
+    config.active_model = ModelId::try_from(spec.id.to_string()).ok();
     config.active_model_path = None;
     let cfg_path = config.save()?;
     eprintln!("Activated '{}' in {}", spec.id, cfg_path);
@@ -178,7 +180,7 @@ fn execute_remove(args: &ModelRemoveArgs) -> Result<ModelsPayload, ModelsError> 
 
 fn execute_hf_cache(args: &HfCacheArgs) -> Result<ModelsPayload, ModelsError> {
     let mut config = AppConfig::load()?;
-    config.allow_hf_cache = args.consent == "enable";
+    config.allow_hf_cache = matches!(args.consent, HfCacheConsent::Enable);
     let cfg_path = config.save()?;
     eprintln!(
         "HuggingFace Hub local cache access {} in {}",
@@ -195,7 +197,8 @@ fn build_models_payload(filter_id: Option<&str>) -> Result<ModelsPayload, Models
     let models = MODEL_CATALOG
         .iter()
         .filter(|spec| filter_id.is_none_or(|id| spec.id == id))
-        .map(|spec| {
+        .filter_map(|spec| {
+            let id = ModelId::try_from(spec.id.to_string()).ok()?;
             let local_path = locate_curated_model(spec, config.allow_hf_cache).map(|src| src.into_path());
             let installed = local_path.is_some();
 
@@ -205,8 +208,8 @@ fn build_models_payload(filter_id: Option<&str>) -> Result<ModelsPayload, Models
                     .as_deref()
                     .is_some_and(|active_id| active_id.eq_ignore_ascii_case(spec.id));
 
-            ModelEntryPayload {
-                id: spec.id.to_string(),
+            Some(ModelEntryPayload {
+                id,
                 hf_repo: spec.hf_repo.to_string(),
                 origin: spec.origin.to_string(),
                 license: spec.license.to_string(),
@@ -221,7 +224,7 @@ fn build_models_payload(filter_id: Option<&str>) -> Result<ModelsPayload, Models
                 installed,
                 active,
                 local_path,
-            }
+            })
         })
         .collect();
 

@@ -13,6 +13,14 @@ use serde::Serialize;
 )]
 pub struct SearchQuery(String);
 
+/// A validated, non-empty embedding model identifier.
+#[nutype(
+    sanitize(trim),
+    validate(not_empty),
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+)]
+pub struct ModelId(String);
+
 /// A UTF-8 path normalized relative to the indexed repository root.
 #[nutype(derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, From, Serialize, Deserialize))]
 pub struct RepoRelativePath(Utf8PathBuf);
