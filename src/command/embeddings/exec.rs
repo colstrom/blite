@@ -23,7 +23,7 @@ use crate::embed::read_embedding_cache;
 use crate::embed::resolve_model_target;
 use crate::embed::stderr_embed_progress;
 use crate::embed::write_embedding_cache;
-use crate::index::collect_documents_for_diagnostics;
+use crate::index::collect_embeddable_docs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingsPayload {
@@ -40,7 +40,7 @@ pub struct EmbeddingsPayload {
 pub(super) fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
     let start = Instant::now();
     let resolved = resolve_model_target(args.model.as_deref(), args.use_hf_cache)?;
-    let docs = collect_documents_for_diagnostics(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
+    let docs = collect_embeddable_docs(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
 
     let embedder = Embedder::load(&resolved)?;
     let cache_path = embedding_cache_path(&resolved.label);
@@ -97,7 +97,7 @@ pub(super) fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayl
 }
 
 pub(super) fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
-    let docs = collect_documents_for_diagnostics(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
+    let docs = collect_embeddable_docs(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
     let mut removed_entries = 0usize;
     let mut removed_files = 0usize;
     let mut model_label = None;

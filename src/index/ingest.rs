@@ -27,7 +27,7 @@ pub(super) struct IndexDocument {
 }
 
 #[derive(Debug, Clone)]
-pub struct DiagnosticDocInput {
+pub struct EmbeddableDoc {
     pub label: String,
     pub text: String,
     pub is_multi_doc: bool,
@@ -153,11 +153,11 @@ pub(super) fn collect_repo_documents(
     Ok(docs)
 }
 
-pub fn collect_documents_for_diagnostics(
+pub fn collect_embeddable_docs(
     root: impl AsRef<Utf8Path>,
     include_vendor: bool,
     include_untracked: bool,
-) -> Result<Vec<DiagnosticDocInput>, IndexError> {
+) -> Result<Vec<EmbeddableDoc>, IndexError> {
     let docs = collect_repo_documents(root.as_ref(), include_vendor, include_untracked)?;
     Ok(docs
         .iter()
@@ -166,7 +166,7 @@ pub fn collect_documents_for_diagnostics(
                 Some(r) => format!("{}:{}..{}", d.rel_path, r.start, r.end),
                 None => d.rel_path.to_string(),
             };
-            DiagnosticDocInput {
+            EmbeddableDoc {
                 label,
                 text: format_doc_for_embedding(d),
                 is_multi_doc: d.is_multi_doc,

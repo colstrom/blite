@@ -18,7 +18,7 @@ use crate::embed::Embedder;
 use crate::embed::ModelResolveOptions;
 use crate::embed::resolve_active_model;
 use crate::index::IndexError;
-use crate::index::collect_documents_for_diagnostics;
+use crate::index::collect_embeddable_docs;
 
 #[derive(Debug, Error, Diagnostic)]
 #[error(transparent)]
@@ -81,7 +81,7 @@ pub struct DiagnosticsPayload {
 
 impl DiagnosticsCommand {
     pub fn execute(&self) -> Result<DiagnosticsPayload, DiagnosticsError> {
-        let docs = collect_documents_for_diagnostics(&self.target.repo, self.filter.include_vendor, self.filter.untracked)?;
+        let docs = collect_embeddable_docs(&self.target.repo, self.filter.include_vendor, self.filter.untracked)?;
         let total_chunks = docs.len();
         let total_bytes: usize = docs.iter().map(|d| d.text.len()).sum();
 
