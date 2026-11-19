@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Instant;
 
-use camino::Utf8PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -15,10 +14,11 @@ use super::EmbeddingsPruneArgs;
 use crate::embed::EMBED_BATCH_SIZE;
 use crate::embed::Embedder;
 use crate::embed::compute_doc_embed_hash;
-use crate::embed::embedding_cache_dir;
 use crate::embed::embedding_cache_path;
 use crate::embed::find_model_spec;
 use crate::embed::hash_doc_with_prefix;
+use crate::embed::list_embedding_cache_files;
+use crate::embed::prune_embedding_cache_file;
 use crate::embed::read_embedding_cache;
 use crate::embed::resolve_model_target;
 use crate::embed::stderr_embed_progress;
@@ -103,18 +103,6 @@ pub(super) fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayl
     let mut model_label = None;
 
     if args.all {
-        let Some(cache_dir) = embedding_cache_dir() else {
-            return Ok(EmbeddingsPayload {
-                action: "prune".to_string(),
-                model: None,
-                total_chunks: docs.len(),
-                cached_hits: 0,
-                newly_computed: 0,
-                removed_entries: 0,
-                removed_files: 0,
-            });
-        };
-
         // Match live hashes against both `doc_prefix: ""` and `doc_prefix: "search_document: "` (Nomic)
         let mut live_hashes = HashSet::with_capacity(docs.len() * 2);
         for doc in &docs {
@@ -122,25 +110,11 @@ pub(super) fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayl
             live_hashes.insert(hash_doc_with_prefix("search_document: ", &doc.text, 512));
         }
 
-        if let Ok(entries) = fs_err::read_dir(&cache_dir) {
-            for entry in entries.flatten() {
-                let Ok(path) = Utf8PathBuf::try_from(entry.path()) else { continue };
-                if path.extension() != Some("bin") {
-                    continue;
-                }
-                let mut map = read_embedding_cache(&path);
-                let before = map.len();
-                map.retain(|hash, _| live_hashes.contains(hash));
-                let pruned = before.saturating_sub(map.len());
-                if pruned > 0 {
-                    removed_entries += pruned;
-                    if map.is_empty() {
-                        let _ = fs_err::remove_file(&path);
-                        removed_files += 1;
-                    } else {
-                        write_embedding_cache(&path, &map);
-                    }
-                }
+        for path in list_embedding_cache_files() {
+            let stats = prune_embedding_cache_file(&path, &live_hashes);
+            removed_entries += stats.removed_entries;
+            if stats.removed_file {
+                removed_files += 1;
             }
         }
     } else {
@@ -150,21 +124,10 @@ pub(super) fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayl
 
         let live_hashes: HashSet<u64> = docs.iter().map(|d| compute_doc_embed_hash(&embedder, &d.text)).collect();
 
-        if let Some(cache_path) = embedding_cache_path(&resolved.label)
-            && cache_path.exists()
-        {
-            let mut map = read_embedding_cache(&cache_path);
-            let before = map.len();
-            map.retain(|hash, _| live_hashes.contains(hash));
-            removed_entries = before.saturating_sub(map.len());
-            if removed_entries > 0 {
-                if map.is_empty() {
-                    let _ = fs_err::remove_file(&cache_path);
-                    removed_files = 1;
-                } else {
-                    write_embedding_cache(&cache_path, &map);
-                }
-            }
+        if let Some(cache_path) = embedding_cache_path(&resolved.label) {
+            let stats = prune_embedding_cache_file(&cache_path, &live_hashes);
+            removed_entries = stats.removed_entries;
+            removed_files = usize::from(stats.removed_file);
         }
     }
 
@@ -189,15 +152,9 @@ pub(super) fn execute_clear(args: &EmbeddingsClearArgs) -> Result<EmbeddingsPayl
     let mut model_label = None;
 
     if args.all {
-        if let Some(cache_dir) = embedding_cache_dir()
-            && cache_dir.is_dir()
-            && let Ok(entries) = fs_err::read_dir(&cache_dir)
-        {
-            for entry in entries.flatten() {
-                let Ok(path) = Utf8PathBuf::try_from(entry.path()) else { continue };
-                if path.extension() == Some("bin") && fs_err::remove_file(&path).is_ok() {
-                    removed_files += 1;
-                }
+        for path in list_embedding_cache_files() {
+            if fs_err::remove_file(&path).is_ok() {
+                removed_files += 1;
             }
         }
     } else if let Some(target) = &args.model {

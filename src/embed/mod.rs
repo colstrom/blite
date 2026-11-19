@@ -9,10 +9,13 @@ mod resolve;
 
 use std::time::Instant;
 
+pub use cache::PruneFileStats;
 pub use cache::compute_doc_embed_hash;
 pub use cache::embedding_cache_dir;
 pub use cache::embedding_cache_path;
 pub use cache::hash_doc_with_prefix;
+pub use cache::list_embedding_cache_files;
+pub use cache::prune_embedding_cache_file;
 pub use cache::read_embedding_cache;
 pub use cache::write_embedding_cache;
 use candle_core::DType;
@@ -30,8 +33,10 @@ pub use download::download_curated_model;
 pub use error::EmbedError;
 pub use hnsw::SemanticIndex;
 pub use resolve::ModelResolveOptions;
+pub use resolve::ModelSource;
 pub use resolve::REQUIRED_MODEL_FILES;
 pub use resolve::ResolvedModel;
+pub use resolve::locate_curated_model;
 pub use resolve::probe_hf_cache_snapshot;
 pub use resolve::resolve_active_model;
 pub use resolve::resolve_model_target;

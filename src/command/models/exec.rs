@@ -19,7 +19,7 @@ use crate::embed::MODEL_CATALOG;
 use crate::embed::download_curated_model;
 use crate::embed::embedding_cache_path;
 use crate::embed::find_model_spec;
-use crate::embed::probe_hf_cache_snapshot;
+use crate::embed::locate_curated_model;
 use crate::embed::validate_model_dir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,12 +107,7 @@ fn execute_use(args: &ModelUseArgs) -> Result<ModelsPayload, ModelsError> {
         config.allow_hf_cache = true;
     }
 
-    let models_dir = AppConfig::models_dir()?;
-    let app_model_dir = models_dir.join(spec.id);
-    let in_app_dir = app_model_dir.is_dir() && validate_model_dir(&app_model_dir).is_ok();
-    let in_hf_cache = config.allow_hf_cache && probe_hf_cache_snapshot(spec.hf_repo).is_some();
-
-    if !in_app_dir && !in_hf_cache {
+    if locate_curated_model(spec, config.allow_hf_cache).is_none() {
         eprintln!(
             "\x1b[1;33mNote:\x1b[0m '{}' is not downloaded locally yet. Run `blite models download {}` to fetch it.",
             spec.id, spec.id
@@ -201,21 +196,8 @@ fn build_models_payload(filter_id: Option<&str>) -> Result<ModelsPayload, Models
         .iter()
         .filter(|spec| filter_id.is_none_or(|id| spec.id == id))
         .map(|spec| {
-            let app_dir = models_dir.join(spec.id);
-            let app_installed = app_dir.is_dir() && validate_model_dir(&app_dir).is_ok();
-            let hf_snapshot = if !app_installed && config.allow_hf_cache {
-                probe_hf_cache_snapshot(spec.hf_repo)
-            } else {
-                None
-            };
-
-            let (installed, local_path) = if app_installed {
-                (true, Some(app_dir))
-            } else if let Some(snap) = hf_snapshot {
-                (true, Some(snap))
-            } else {
-                (false, None)
-            };
+            let local_path = locate_curated_model(spec, config.allow_hf_cache).map(|src| src.into_path());
+            let installed = local_path.is_some();
 
             let active = config.active_model_path.is_none()
                 && config

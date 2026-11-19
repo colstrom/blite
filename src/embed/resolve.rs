@@ -4,6 +4,7 @@ use camino::Utf8Path;
 use camino::Utf8PathBuf;
 
 use super::EmbedError;
+use super::ModelSpec;
 use super::catalog::find_model_spec;
 use super::catalog::infer_prefixes_from_dir;
 use crate::config::AppConfig;
@@ -20,6 +21,48 @@ pub fn validate_model_dir(dir: &Utf8Path) -> Result<(), EmbedError> {
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub enum ModelSource {
+    AppDir(Utf8PathBuf),
+    HfCache(Utf8PathBuf),
+}
+
+impl ModelSource {
+    pub fn into_path(self) -> Utf8PathBuf {
+        match self {
+            Self::AppDir(path) | Self::HfCache(path) => path,
+        }
+    }
+
+    pub fn into_resolved(self, spec: &ModelSpec) -> ResolvedModel {
+        let (label, dir) = match self {
+            Self::AppDir(path) => (spec.id.to_string(), path),
+            Self::HfCache(path) => (format!("{} (hf-cache)", spec.id), path),
+        };
+        ResolvedModel {
+            label,
+            dir,
+            query_prefix: spec.query_prefix.to_string(),
+            doc_prefix: spec.doc_prefix.to_string(),
+        }
+    }
+}
+
+pub fn locate_curated_model(spec: &ModelSpec, allow_hf_cache: bool) -> Option<ModelSource> {
+    if let Ok(models_dir) = AppConfig::models_dir() {
+        let app_dir = models_dir.join(spec.id);
+        if app_dir.is_dir() && validate_model_dir(&app_dir).is_ok() {
+            return Some(ModelSource::AppDir(app_dir));
+        }
+    }
+
+    if allow_hf_cache && let Some(hf_dir) = probe_hf_cache_snapshot(spec.hf_repo) {
+        return Some(ModelSource::HfCache(hf_dir));
+    }
+
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -66,10 +109,10 @@ pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> R
         return Ok(None);
     };
 
-    let spec = find_model_spec(model_id);
-    let (query_prefix, doc_prefix) = spec
-        .map(|s| (s.query_prefix.to_string(), s.doc_prefix.to_string()))
-        .unwrap_or_default();
+    let hf_consented = opts.allow_hf_cache_override || config.allow_hf_cache;
+    if let Some(spec) = find_model_spec(model_id) {
+        return Ok(locate_curated_model(spec, hf_consented).map(|src| src.into_resolved(spec)));
+    }
 
     if let Ok(models_root) = AppConfig::models_dir() {
         let local_dir = models_root.join(model_id);
@@ -77,23 +120,10 @@ pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> R
             return Ok(Some(ResolvedModel {
                 label: model_id.clone(),
                 dir: local_dir,
-                query_prefix,
-                doc_prefix,
+                query_prefix: String::new(),
+                doc_prefix: String::new(),
             }));
         }
-    }
-
-    let hf_consented = opts.allow_hf_cache_override || config.allow_hf_cache;
-    if hf_consented
-        && let Some(spec) = spec
-        && let Some(hf_dir) = probe_hf_cache_snapshot(spec.hf_repo)
-    {
-        return Ok(Some(ResolvedModel {
-            label: format!("{} (hf-cache)", spec.id),
-            dir: hf_dir,
-            query_prefix,
-            doc_prefix,
-        }));
     }
 
     Ok(None)
@@ -118,28 +148,10 @@ pub fn resolve_model_target(target: Option<&str>, allow_hf_cache: bool) -> Resul
         }
 
         let spec = find_model_spec(target).ok_or_else(|| EmbedError::UnknownModel(target.to_string()))?;
-        let app_dir = AppConfig::models_dir()?.join(spec.id);
-        if app_dir.is_dir() && validate_model_dir(&app_dir).is_ok() {
-            return Ok(ResolvedModel {
-                label: spec.id.to_string(),
-                dir: app_dir,
-                query_prefix: spec.query_prefix.to_string(),
-                doc_prefix: spec.doc_prefix.to_string(),
-            });
-        }
-
-        if (allow_hf_cache || config.allow_hf_cache)
-            && let Some(hf_dir) = probe_hf_cache_snapshot(spec.hf_repo)
-        {
-            return Ok(ResolvedModel {
-                label: format!("{} (hf-cache)", spec.id),
-                dir: hf_dir,
-                query_prefix: spec.query_prefix.to_string(),
-                doc_prefix: spec.doc_prefix.to_string(),
-            });
-        }
-
-        return Err(EmbedError::ModelUnavailable);
+        let hf_consented = allow_hf_cache || config.allow_hf_cache;
+        return locate_curated_model(spec, hf_consented)
+            .map(|src| src.into_resolved(spec))
+            .ok_or(EmbedError::ModelUnavailable);
     }
 
     resolve_active_model(

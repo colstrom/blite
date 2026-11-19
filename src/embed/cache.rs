@@ -1,6 +1,7 @@
 // src/embed/cache.rs
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use camino::Utf8Path;
 use camino::Utf8PathBuf;
@@ -12,6 +13,12 @@ use crate::hash::fnv1a_64_parts;
 
 const CACHE_MAGIC: &[u8; 8] = b"BLITEEMB";
 const CACHE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PruneFileStats {
+    pub removed_entries: usize,
+    pub removed_file: bool,
+}
 
 pub(super) fn hash_embed_text(prefix: &str, text: &str) -> u64 {
     fnv1a_64_parts([prefix.as_bytes(), b"\0", text.as_bytes()])
@@ -35,6 +42,46 @@ pub fn embedding_cache_path(model_label: &str) -> Option<Utf8PathBuf> {
         })
         .collect();
     Some(cache_dir.join(format!("{safe_name}.bin")))
+}
+
+pub fn list_embedding_cache_files() -> Vec<Utf8PathBuf> {
+    let Some(cache_dir) = embedding_cache_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs_err::read_dir(&cache_dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| Utf8PathBuf::try_from(entry.path()).ok())
+        .filter(|path| path.extension() == Some("bin"))
+        .collect()
+}
+
+pub fn prune_embedding_cache_file(path: &Utf8Path, live_hashes: &HashSet<u64>) -> PruneFileStats {
+    if !path.exists() {
+        return PruneFileStats::default();
+    }
+
+    let mut map = read_embedding_cache(path);
+    let before = map.len();
+    map.retain(|hash, _| live_hashes.contains(hash));
+    let removed_entries = before.saturating_sub(map.len());
+
+    let mut removed_file = false;
+    if removed_entries > 0 {
+        if map.is_empty() {
+            removed_file = fs_err::remove_file(path).is_ok();
+        } else {
+            write_embedding_cache(path, &map);
+        }
+    }
+
+    PruneFileStats {
+        removed_entries,
+        removed_file,
+    }
 }
 
 pub fn hash_doc_with_prefix(prefix: &str, text: &str, max_tokens: usize) -> u64 {
