@@ -5,7 +5,6 @@ use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use clap::Args;
 use clap::Subcommand;
-use hf_hub::HFClientSync;
 use miette::Diagnostic;
 use serde::Deserialize;
 use serde::Serialize;
@@ -15,8 +14,7 @@ use crate::config::AppConfig;
 use crate::config::ConfigError;
 use crate::embed::EmbedError;
 use crate::embed::MODEL_CATALOG;
-use crate::embed::ModelSpec;
-use crate::embed::REQUIRED_MODEL_FILES;
+use crate::embed::download_curated_model;
 use crate::embed::find_model_spec;
 use crate::embed::probe_hf_cache_snapshot;
 use crate::embed::validate_model_dir;
@@ -37,10 +35,6 @@ pub enum ModelsError {
     #[error("failed to serialize models payload: {0}")]
     #[diagnostic(code(blite::models::json))]
     Json(#[from] serde_json::Error),
-
-    #[error("HuggingFace Hub download error: {0}")]
-    #[diagnostic(code(blite::models::hf_hub))]
-    HfHub(String),
 }
 
 #[derive(Debug, Clone, Args, Builder)]
@@ -279,33 +273,6 @@ impl ModelsCommand {
         let payload = self.execute()?;
         Ok(serde_json::to_value(payload)?)
     }
-}
-
-fn download_curated_model(spec: &ModelSpec) -> Result<Utf8PathBuf, ModelsError> {
-    let dest_dir = AppConfig::models_dir()?.join(spec.id);
-    fs_err::create_dir_all(&dest_dir)?;
-
-    let (owner, name) = spec
-        .hf_repo
-        .split_once('/')
-        .ok_or_else(|| ModelsError::HfHub(format!("invalid HuggingFace repo id '{}'", spec.hf_repo)))?;
-
-    eprintln!("Downloading {} ({}) into {}...", spec.id, spec.hf_repo, dest_dir);
-
-    let client = HFClientSync::new().map_err(|e| ModelsError::HfHub(e.to_string()))?;
-    let repo = client.model(owner, name);
-
-    for filename in REQUIRED_MODEL_FILES {
-        repo.download_file()
-            .filename(*filename)
-            .local_dir(dest_dir.as_std_path())
-            .send()
-            .map_err(|e| ModelsError::HfHub(format!("failed to download '{filename}': {e}")))?;
-    }
-
-    validate_model_dir(&dest_dir)?;
-    eprintln!("\x1b[1;32mInstalled {}\x1b[0m at {}", spec.id, dest_dir);
-    Ok(dest_dir)
 }
 
 fn build_models_payload(filter_id: Option<&str>) -> Result<ModelsPayload, ModelsError> {

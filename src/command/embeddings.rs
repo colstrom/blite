@@ -1,5 +1,6 @@
 // src/command/embeddings.rs
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -14,21 +15,17 @@ use thiserror::Error;
 
 use super::args::IndexFilterArgs;
 use super::args::RepoTargetArgs;
-use crate::config::AppConfig;
 use crate::config::ConfigError;
 use crate::embed::EMBED_BATCH_SIZE;
 use crate::embed::EmbedError;
 use crate::embed::Embedder;
-use crate::embed::ModelResolveOptions;
-use crate::embed::ResolvedModel;
 use crate::embed::compute_doc_embed_hash;
 use crate::embed::embedding_cache_dir;
 use crate::embed::embedding_cache_path;
 use crate::embed::find_model_spec;
-use crate::embed::probe_hf_cache_snapshot;
+use crate::embed::hash_doc_with_prefix;
 use crate::embed::read_embedding_cache;
-use crate::embed::resolve_active_model;
-use crate::embed::validate_model_dir;
+use crate::embed::resolve_model_target;
 use crate::embed::write_embedding_cache;
 use crate::index::IndexError;
 use crate::index::collect_documents_for_diagnostics;
@@ -159,66 +156,15 @@ impl EmbeddingsCommand {
     }
 }
 
-fn resolve_target_model(model_arg: Option<&str>, allow_hf_cache: bool) -> Result<ResolvedModel, EmbedError> {
-    let config = AppConfig::load()?;
-
-    if let Some(target) = model_arg {
-        let path = camino::Utf8Path::new(target);
-        if path.is_dir() {
-            return resolve_active_model(
-                &config,
-                &ModelResolveOptions {
-                    override_model_dir: Some(path.to_path_buf()),
-                    allow_hf_cache_override: allow_hf_cache,
-                },
-            )?
-            .ok_or(EmbedError::ModelUnavailable);
-        }
-
-        let spec = find_model_spec(target).ok_or_else(|| EmbedError::UnknownModel(target.to_string()))?;
-        let app_dir = AppConfig::models_dir()?.join(spec.id);
-        if app_dir.is_dir() && validate_model_dir(&app_dir).is_ok() {
-            return Ok(ResolvedModel {
-                label: spec.id.to_string(),
-                dir: app_dir,
-                query_prefix: spec.query_prefix.to_string(),
-                doc_prefix: spec.doc_prefix.to_string(),
-            });
-        }
-
-        if (allow_hf_cache || config.allow_hf_cache)
-            && let Some(hf_dir) = probe_hf_cache_snapshot(spec.hf_repo)
-        {
-            return Ok(ResolvedModel {
-                label: format!("{} (hf-cache)", spec.id),
-                dir: hf_dir,
-                query_prefix: spec.query_prefix.to_string(),
-                doc_prefix: spec.doc_prefix.to_string(),
-            });
-        }
-
-        return Err(EmbedError::ModelUnavailable);
-    }
-
-    resolve_active_model(
-        &config,
-        &ModelResolveOptions {
-            override_model_dir: None,
-            allow_hf_cache_override: allow_hf_cache,
-        },
-    )?
-    .ok_or(EmbedError::ModelUnavailable)
-}
-
 fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
     let start = Instant::now();
-    let resolved = resolve_target_model(args.model.as_deref(), args.use_hf_cache)?;
+    let resolved = resolve_model_target(args.model.as_deref(), args.use_hf_cache)?;
     let docs = collect_documents_for_diagnostics(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
 
     let embedder = Embedder::load(&resolved)?;
     let cache_path = embedding_cache_path(&resolved.label);
     let mut cache = if args.force {
-        std::collections::HashMap::new()
+        HashMap::new()
     } else {
         cache_path.as_deref().map(read_embedding_cache).unwrap_or_default()
     };
@@ -297,8 +243,8 @@ fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayload, Embedd
         // Match live hashes against both `doc_prefix: ""` and `doc_prefix: "search_document: "` (Nomic)
         let mut live_hashes = HashSet::with_capacity(docs.len() * 2);
         for doc in &docs {
-            live_hashes.insert(crate::embed::hash_doc_with_prefix("", &doc.text, 512));
-            live_hashes.insert(crate::embed::hash_doc_with_prefix("search_document: ", &doc.text, 512));
+            live_hashes.insert(hash_doc_with_prefix("", &doc.text, 512));
+            live_hashes.insert(hash_doc_with_prefix("search_document: ", &doc.text, 512));
         }
 
         if let Ok(entries) = fs_err::read_dir(&cache_dir) {
@@ -323,7 +269,7 @@ fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayload, Embedd
             }
         }
     } else {
-        let resolved = resolve_target_model(args.model.as_deref(), args.use_hf_cache)?;
+        let resolved = resolve_model_target(args.model.as_deref(), args.use_hf_cache)?;
         let embedder = Embedder::load(&resolved)?;
         model_label = Some(resolved.label.clone());
 
