@@ -1,23 +1,18 @@
-// src/command/embeddings.rs
+// src/command/embeddings/exec.rs
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Instant;
 
-use bon::Builder;
 use camino::Utf8PathBuf;
-use clap::Args;
-use clap::Subcommand;
-use miette::Diagnostic;
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
 
-use super::args::IndexFilterArgs;
-use super::args::RepoTargetArgs;
-use crate::config::ConfigError;
+use super::EmbeddingsBuildArgs;
+use super::EmbeddingsClearArgs;
+use super::EmbeddingsError;
+use super::EmbeddingsPruneArgs;
 use crate::embed::EMBED_BATCH_SIZE;
-use crate::embed::EmbedError;
 use crate::embed::Embedder;
 use crate::embed::compute_doc_embed_hash;
 use crate::embed::embedding_cache_dir;
@@ -27,107 +22,7 @@ use crate::embed::hash_doc_with_prefix;
 use crate::embed::read_embedding_cache;
 use crate::embed::resolve_model_target;
 use crate::embed::write_embedding_cache;
-use crate::index::IndexError;
 use crate::index::collect_documents_for_diagnostics;
-
-#[derive(Debug, Error, Diagnostic)]
-#[error(transparent)]
-pub enum EmbeddingsError {
-    #[diagnostic(transparent)]
-    Config(#[from] ConfigError),
-
-    #[diagnostic(transparent)]
-    Embed(#[from] EmbedError),
-
-    #[diagnostic(transparent)]
-    Index(#[from] IndexError),
-
-    #[diagnostic(code(blite::embeddings::io))]
-    Io(#[from] std::io::Error),
-
-    #[diagnostic(code(blite::embeddings::json))]
-    Json(#[from] serde_json::Error),
-}
-
-#[derive(Debug, Clone, Args, Builder)]
-pub struct EmbeddingsCommand {
-    #[command(subcommand)]
-    action: EmbeddingsAction,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum EmbeddingsAction {
-    /// Generate or rebuild cached embedding vectors for a repository
-    #[command(visible_aliases = ["generate", "warm", "rebuild"])]
-    Build(EmbeddingsBuildArgs),
-    /// Remove cached embeddings for files/chunks no longer present in a target repository
-    Prune(EmbeddingsPruneArgs),
-    /// Delete cached embedding files for a specific model or across all models
-    #[command(visible_aliases = ["clean", "purge"])]
-    Clear(EmbeddingsClearArgs),
-}
-
-#[derive(Debug, Clone, Args, Builder)]
-pub struct EmbeddingsBuildArgs {
-    #[command(flatten)]
-    #[builder(default)]
-    pub target: RepoTargetArgs,
-
-    /// Model ID or local model directory path (defaults to the active model in config)
-    #[arg(short, long)]
-    pub model: Option<String>,
-
-    /// Recompute all embeddings from scratch even if already cached
-    #[arg(long)]
-    #[builder(default = false)]
-    pub force: bool,
-
-    /// Allow reading models from the local HuggingFace Hub cache
-    #[arg(long, env = "BLITE_USE_HF_CACHE")]
-    #[builder(default = false)]
-    pub use_hf_cache: bool,
-
-    #[command(flatten)]
-    #[builder(default)]
-    pub filter: IndexFilterArgs,
-}
-
-#[derive(Debug, Clone, Args, Builder)]
-pub struct EmbeddingsPruneArgs {
-    #[command(flatten)]
-    #[builder(default)]
-    pub target: RepoTargetArgs,
-
-    /// Model ID or local model directory path (defaults to the active model in config)
-    #[arg(short, long, conflicts_with = "all")]
-    pub model: Option<String>,
-
-    /// Prune stale entries across all cached model files
-    #[arg(long, conflicts_with = "model")]
-    #[builder(default = false)]
-    pub all: bool,
-
-    /// Allow reading models from the local HuggingFace Hub cache
-    #[arg(long, env = "BLITE_USE_HF_CACHE")]
-    #[builder(default = false)]
-    pub use_hf_cache: bool,
-
-    #[command(flatten)]
-    #[builder(default)]
-    pub filter: IndexFilterArgs,
-}
-
-#[derive(Debug, Clone, Args, Builder)]
-pub struct EmbeddingsClearArgs {
-    /// Model ID or local model directory path to clear cache for
-    #[arg(short, long, required_unless_present = "all", conflicts_with = "all")]
-    pub model: Option<String>,
-
-    /// Clear cached embeddings for all models
-    #[arg(long, required_unless_present = "model", conflicts_with = "model")]
-    #[builder(default = false)]
-    pub all: bool,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingsPayload {
@@ -141,22 +36,7 @@ pub struct EmbeddingsPayload {
     pub removed_files: usize,
 }
 
-impl EmbeddingsCommand {
-    pub fn execute(&self) -> Result<EmbeddingsPayload, EmbeddingsError> {
-        match &self.action {
-            EmbeddingsAction::Build(args) => execute_build(args),
-            EmbeddingsAction::Prune(args) => execute_prune(args),
-            EmbeddingsAction::Clear(args) => execute_clear(args),
-        }
-    }
-
-    pub fn run(self) -> Result<serde_json::Value, EmbeddingsError> {
-        let payload = self.execute()?;
-        Ok(serde_json::to_value(payload)?)
-    }
-}
-
-fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
+pub(super) fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
     let start = Instant::now();
     let resolved = resolve_model_target(args.model.as_deref(), args.use_hf_cache)?;
     let docs = collect_documents_for_diagnostics(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
@@ -221,7 +101,7 @@ fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayload, Embedd
     })
 }
 
-fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
+pub(super) fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
     let docs = collect_documents_for_diagnostics(&args.target.repo, args.filter.include_vendor, args.filter.untracked)?;
     let mut removed_entries = 0usize;
     let mut removed_files = 0usize;
@@ -309,7 +189,7 @@ fn execute_prune(args: &EmbeddingsPruneArgs) -> Result<EmbeddingsPayload, Embedd
     })
 }
 
-fn execute_clear(args: &EmbeddingsClearArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
+pub(super) fn execute_clear(args: &EmbeddingsClearArgs) -> Result<EmbeddingsPayload, EmbeddingsError> {
     let mut removed_files = 0usize;
     let mut model_label = None;
 
