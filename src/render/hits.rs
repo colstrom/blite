@@ -1,7 +1,6 @@
 // src/render/hits.rs
 
 use jiff::Timestamp;
-use jiff::Unit;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Style;
 use syntect::highlighting::ThemeSet;
@@ -144,29 +143,54 @@ pub(super) fn render_search_hits(
 }
 
 fn format_relative_age(unix_seconds: i64) -> String {
+    format_relative_age_from(Timestamp::now(), unix_seconds)
+}
+
+fn format_relative_age_from(now: Timestamp, unix_seconds: i64) -> String {
+    const MINUTE: i64 = 60;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    const MONTH: i64 = 30 * DAY;
+    const YEAR: i64 = 365 * DAY;
+
     let Ok(then) = Timestamp::from_second(unix_seconds) else {
         return "unknown".to_string();
     };
-    let now = Timestamp::now();
-    let total_secs = now.as_second().saturating_sub(then.as_second());
 
-    if total_secs < 60 {
-        return "just now".to_string();
-    }
-
-    let Ok(span) = now.since((Unit::Year, then)) else {
-        return format!("{}d ago", total_secs / 86_400);
-    };
-
-    if span.get_years() > 0 {
-        format!("{}y ago", span.get_years())
-    } else if span.get_months() > 0 {
-        format!("{}mo ago", span.get_months())
-    } else if span.get_days() > 0 {
-        format!("{}d ago", span.get_days())
-    } else if span.get_hours() > 0 {
-        format!("{}h ago", span.get_hours())
+    let elapsed = now.as_second().saturating_sub(then.as_second());
+    if elapsed < MINUTE {
+        "just now".to_string()
+    } else if elapsed < HOUR {
+        format!("{}m ago", elapsed / MINUTE)
+    } else if elapsed < DAY {
+        format!("{}h ago", elapsed / HOUR)
+    } else if elapsed < MONTH {
+        format!("{}d ago", elapsed / DAY)
+    } else if elapsed < YEAR {
+        format!("{}mo ago", elapsed / MONTH)
     } else {
-        format!("{}m ago", span.get_minutes().max(1))
+        format!("{}y ago", elapsed / YEAR)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use jiff::Timestamp;
+
+    use super::format_relative_age_from;
+
+    #[test]
+    fn formats_relative_ages_across_units() {
+        let now = Timestamp::from_second(1_700_000_000).unwrap();
+        let base = now.as_second();
+
+        assert_eq!(format_relative_age_from(now, base + 300), "just now");
+        assert_eq!(format_relative_age_from(now, base - 45), "just now");
+        assert_eq!(format_relative_age_from(now, base - 60), "1m ago");
+        assert_eq!(format_relative_age_from(now, base - 45 * 60), "45m ago");
+        assert_eq!(format_relative_age_from(now, base - 3 * 3_600), "3h ago");
+        assert_eq!(format_relative_age_from(now, base - 12 * 86_400), "12d ago");
+        assert_eq!(format_relative_age_from(now, base - 75 * 86_400), "2mo ago");
+        assert_eq!(format_relative_age_from(now, base - 400 * 86_400), "1y ago");
     }
 }
