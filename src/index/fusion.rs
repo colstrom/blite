@@ -5,7 +5,7 @@ use std::collections::HashMap;
 const RRF_K: f32 = 60.0;
 
 pub(super) fn has_field_filter(query: &str) -> bool {
-    ["kind:", "ns:", "name:", "labels:", "annotations:", "symbol:", "path:"]
+    ["kind:", "ns:", "name:", "labels:", "annotations:", "symbol:", "path:", "doc_index:"]
         .iter()
         .any(|prefix| query.contains(prefix))
 }

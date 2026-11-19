@@ -35,7 +35,7 @@ pub(super) fn chunk_filter_script(lines: &[&str]) -> Vec<CodeChunk> {
             .and_then(|rest| rest.split(['(', ':', ';', ' ', '\t']).next())
             .unwrap_or_default();
 
-        let symbol = SymbolName::try_from(raw_name.to_string()).ok();
+        let symbol = SymbolName::try_from(raw_name).ok();
 
         chunks.push(CodeChunk {
             symbol,

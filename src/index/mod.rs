@@ -13,7 +13,6 @@ use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use fusion::has_field_filter;
 use fusion::rrf_fuse;
-pub use ingest::EmbeddableDoc;
 use ingest::IndexDocument;
 pub use ingest::collect_embeddable_docs;
 use ingest::collect_repo_documents;
@@ -121,6 +120,8 @@ pub struct SearchHit {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drift: Option<DriftReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_index: Option<usize>,
 }
 
 pub struct RepoIndex {
@@ -143,10 +144,6 @@ struct ExtractedMetadata {
 }
 
 impl RepoIndex {
-    pub fn build_from_dir(root: impl AsRef<Utf8Path>) -> Result<Self, IndexError> {
-        Self::build_with_options(root, &IndexBuildOptions::default())
-    }
-
     #[instrument(skip_all, fields(root = %root.as_ref()))]
     pub fn build_with_options(root: impl AsRef<Utf8Path>, opts: &IndexBuildOptions) -> Result<Self, IndexError> {
         let root = root.as_ref();
@@ -191,10 +188,6 @@ impl RepoIndex {
             labels: metadata.labels,
             annotations: metadata.annotations,
         })
-    }
-
-    pub fn active_semantic_model(&self) -> Option<&str> {
-        self.semantic.as_ref().map(|s| s.model_label.as_str())
     }
 
     #[instrument(skip(self), fields(query = %query))]

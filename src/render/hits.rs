@@ -52,6 +52,11 @@ fn format_hit_header(rank: usize, hit: &SearchHit) -> String {
         None => hit.path.to_string(),
     };
 
+    let doc_badge = match hit.doc_index {
+        Some(idx) => format!(" \x1b[2m[doc #{idx}]\x1b[0m"),
+        None => String::new(),
+    };
+
     let badge = match (&hit.k8s, &hit.symbol) {
         (Some(k8s), _) => {
             let name = k8s.name.as_deref().unwrap_or("<unnamed>");
@@ -72,7 +77,7 @@ fn format_hit_header(rank: usize, hit: &SearchHit) -> String {
     };
 
     format!(
-        "\x1b[1;36m[{rank}] {location}\x1b[0m{badge}{drift_badge} \x1b[2m(score: {score:.2})\x1b[0m\n",
+        "\x1b[1;36m[{rank}] {location}\x1b[0m{doc_badge}{badge}{drift_badge} \x1b[2m(score: {score:.2})\x1b[0m\n",
         score = hit.score
     )
 }

@@ -62,7 +62,7 @@ impl SemanticIndex {
                 vectors[idx] = cached_vec.clone();
             } else {
                 uncached_indices.push(idx);
-                uncached_docs.push((label.clone(), text.clone()));
+                uncached_docs.push((label.as_str(), text.as_str()));
             }
         }
 

@@ -80,7 +80,7 @@ fn execute_download(args: &ModelDownloadArgs) -> Result<ModelsPayload, ModelsErr
 
     let mut config = AppConfig::load()?;
     if !args.no_activate {
-        config.active_model = ModelId::try_from(spec.id.to_string()).ok();
+        config.active_model = ModelId::try_from(spec.id).ok();
         config.active_model_path = None;
         let cfg_path = config.save()?;
         eprintln!("Activated '{}' in {}", spec.id, cfg_path);
@@ -116,7 +116,7 @@ fn execute_use(args: &ModelUseArgs) -> Result<ModelsPayload, ModelsError> {
         );
     }
 
-    config.active_model = ModelId::try_from(spec.id.to_string()).ok();
+    config.active_model = ModelId::try_from(spec.id).ok();
     config.active_model_path = None;
     let cfg_path = config.save()?;
     eprintln!("Activated '{}' in {}", spec.id, cfg_path);
@@ -198,7 +198,7 @@ fn build_models_payload(filter_id: Option<&str>) -> Result<ModelsPayload, Models
         .iter()
         .filter(|spec| filter_id.is_none_or(|id| spec.id == id))
         .filter_map(|spec| {
-            let id = ModelId::try_from(spec.id.to_string()).ok()?;
+            let id = ModelId::try_from(spec.id).ok()?;
             let local_path = locate_curated_model(spec, config.allow_hf_cache).map(|src| src.into_path());
             let installed = local_path.is_some();
 

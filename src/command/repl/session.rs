@@ -8,6 +8,7 @@ use tracing::debug;
 use tracing::info;
 
 use super::ReplError;
+use crate::command::search::enrich_search_hits;
 use crate::drift::KitchenComparator;
 use crate::git::FileCommitHistory;
 use crate::git::GitHistoryError;
@@ -67,16 +68,7 @@ impl ReplSession {
         let repo = &self.repo;
         let history = self.file_history.get_or_insert_with(|| FileCommitHistory::build_from_dir(repo));
         let mut hits = self.index.search(query, self.limit)?;
-
-        for hit in &mut hits {
-            let commits = history.commits_for(&hit.path);
-            if !commits.is_empty() {
-                hit.recent_commits = commits.to_vec();
-            }
-            if let Some(comp) = &self.comparator {
-                hit.drift = Some(comp.compare(&hit.path));
-            }
-        }
+        enrich_search_hits(&mut hits, history, self.comparator.as_ref());
 
         debug!(
             hits = hits.len(),

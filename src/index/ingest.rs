@@ -24,6 +24,7 @@ pub(super) struct IndexDocument {
     pub symbol: Option<SymbolName>,
     pub lines: Option<LineRange>,
     pub is_multi_doc: bool,
+    pub doc_index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +122,7 @@ pub(super) fn collect_repo_documents(
                         symbol: None,
                         lines: yd.lines,
                         is_multi_doc: yd.is_multi_doc,
+                        doc_index: yd.is_multi_doc.then_some(yd.doc_index),
                     })
                     .collect();
             }
@@ -134,6 +136,7 @@ pub(super) fn collect_repo_documents(
                     symbol: None,
                     lines: None,
                     is_multi_doc: false,
+                    doc_index: None,
                 }]
             } else {
                 chunks
@@ -145,6 +148,7 @@ pub(super) fn collect_repo_documents(
                         symbol: chunk.symbol,
                         lines: Some(chunk.lines),
                         is_multi_doc: false,
+                        doc_index: None,
                     })
                     .collect()
             }

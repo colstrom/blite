@@ -117,7 +117,7 @@ impl GitHistoryIndex {
                 .map(|p| RepoRelativePath::from(Utf8PathBuf::from(p)))
                 .collect();
 
-            let Ok(oid) = CommitOid::try_from(oid_str) else {
+            let Ok(oid) = CommitOid::try_from(oid_str.as_str()) else {
                 continue;
             };
 

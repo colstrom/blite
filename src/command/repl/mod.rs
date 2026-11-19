@@ -2,7 +2,7 @@
 
 mod helper;
 mod history;
-pub mod session;
+mod session;
 
 use std::borrow::Cow;
 use std::time::Instant;
@@ -24,10 +24,12 @@ use rustyline::history::DefaultHistory;
 use session::ReplSession;
 use thiserror::Error;
 
+use crate::command::ExecuteCommand;
 use crate::command::args::IndexFilterArgs;
 use crate::command::args::ReplHistoryArgs;
 use crate::command::args::RepoTargetArgs;
 use crate::command::args::SemanticArgs;
+use crate::command::runnable;
 use crate::index::IndexError;
 use crate::render::RenderError;
 use crate::render::TerminalRenderer;
@@ -51,28 +53,28 @@ pub enum ReplError {
 pub struct ReplCommand {
     #[command(flatten)]
     #[builder(default)]
-    pub target: RepoTargetArgs,
+    pub(crate) target: RepoTargetArgs,
 
     /// Optional path to the kitchen repository for drift comparison
     #[arg(short, long)]
-    pub kitchen: Option<Utf8PathBuf>,
+    pub(crate) kitchen: Option<Utf8PathBuf>,
 
     /// Maximum number of matching documents to return per query
     #[arg(short = 'n', long, default_value_t = 5)]
     #[builder(default = 5)]
-    pub limit: usize,
+    pub(crate) limit: usize,
 
     #[command(flatten)]
     #[builder(default)]
-    pub history: ReplHistoryArgs,
+    pub(crate) history: ReplHistoryArgs,
 
     #[command(flatten)]
     #[builder(default)]
-    pub semantic: SemanticArgs,
+    pub(crate) semantic: SemanticArgs,
 
     #[command(flatten)]
     #[builder(default)]
-    pub filter: IndexFilterArgs,
+    pub(crate) filter: IndexFilterArgs,
 }
 
 impl Default for ReplCommand {
@@ -94,8 +96,11 @@ enum ReplAction {
     Search(SearchQuery),
 }
 
-impl ReplCommand {
-    pub fn run(self) -> Result<(), ReplError> {
+impl ExecuteCommand for ReplCommand {
+    type Error = ReplError;
+    type Output = ();
+
+    fn execute(self) -> Result<Self::Output, Self::Error> {
         let start = Instant::now();
         let build_opts = self.semantic.to_build_options(&self.filter, true);
         let mut session = ReplSession::new(self.target.repo.clone(), self.kitchen.as_deref(), self.limit, build_opts)?;
@@ -134,6 +139,8 @@ impl ReplCommand {
         Ok(())
     }
 }
+
+runnable!(ReplCommand);
 
 fn init_editor(session: &ReplSession, history_path: Option<&Utf8Path>) -> Result<Editor<ReplHelper, DefaultHistory>, ReplError> {
     let rl_config = Config::builder()
@@ -264,7 +271,7 @@ fn print_help() {
     eprintln!(
         "\
 Commands:
-  <query>           Search manifests & code (supports kind:, ns:, labels:, annotations:, symbol:)
+  <query>           Search manifests & code (supports kind:, ns:, labels:, annotations:, symbol:, doc_index:)
   :history <query>  Search Git commit messages, authors, and touched file paths
   :history-path     Show the active REPL history file path (or if disabled)
   :limit <N>        Set max results shown per query
@@ -280,6 +287,11 @@ mod tests {
 
     use super::ReplAction;
     use super::parse_input;
+    use crate::index::IndexBuildOptions;
+    use crate::index::RepoIndex;
+    use crate::index::SemanticMode;
+    use crate::test_util::TempDir;
+    use crate::types::LineRange;
     use crate::types::SearchQuery;
 
     #[test]
@@ -332,5 +344,65 @@ mod tests {
             ReplAction::Search(SearchQuery::try_from("kind:Deployment web").unwrap())
         );
         assert_eq!(parse_input("   "), ReplAction::Continue);
+    }
+    fn lexical_build_opts() -> IndexBuildOptions {
+        IndexBuildOptions::builder()
+            .semantic_mode(SemanticMode::Off)
+            .include_untracked(true)
+            .build()
+    }
+
+    #[test]
+    fn omits_doc_index_on_single_document_manifests() {
+        let tmp = TempDir::new("single-doc-index");
+        let manifest = "\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: edge
+";
+        fs_err::write(tmp.path().join("deployment.yaml"), manifest).unwrap();
+
+        let index = RepoIndex::build_with_options(tmp.path(), &lexical_build_opts()).unwrap();
+        let query = SearchQuery::try_from("api-gateway").unwrap();
+        let hits = index.search(&query, 5).unwrap();
+
+        assert_eq!(hits.len(), 1);
+        let hit = hits.first().unwrap();
+        assert_eq!(hit.doc_index, None);
+        assert_eq!(hit.lines, None);
+    }
+
+    #[test]
+    fn indexes_and_filters_by_doc_index_in_multi_doc_streams() {
+        let tmp = TempDir::new("multi-doc-index");
+        let stream = "\
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flux-system
+---
+# non-k8s YAML block occupies doc_index 1
+notes: skipped during k8s extraction
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kustomize-controller
+  namespace: flux-system
+";
+        fs_err::write(tmp.path().join("gotk-components.yaml"), stream).unwrap();
+
+        let index = RepoIndex::build_with_options(tmp.path(), &lexical_build_opts()).unwrap();
+
+        let filtered = SearchQuery::try_from("path:gotk-components.yaml AND doc_index:2").unwrap();
+        let hits = index.search(&filtered, 5).unwrap();
+
+        assert_eq!(hits.len(), 1);
+        let hit = hits.first().unwrap();
+        assert_eq!(hit.doc_index, Some(2));
+        assert_eq!(hit.lines, Some(LineRange { start: 8, end: 13 }));
+        assert_eq!(hit.k8s.as_ref().and_then(|k| k.name.as_deref()), Some("kustomize-controller"));
     }
 }

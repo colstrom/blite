@@ -9,9 +9,7 @@ mod resolve;
 
 use std::time::Instant;
 
-pub use cache::PruneFileStats;
 pub use cache::compute_doc_embed_hash;
-pub use cache::embedding_cache_dir;
 pub use cache::embedding_cache_path;
 pub use cache::hash_doc_with_prefix;
 pub use cache::list_embedding_cache_files;
@@ -33,12 +31,10 @@ pub use download::download_curated_model;
 pub use error::EmbedError;
 pub use hnsw::SemanticIndex;
 pub use resolve::ModelResolveOptions;
-pub use resolve::ModelSource;
 pub use resolve::REQUIRED_MODEL_FILES;
 pub use resolve::ResolvedModel;
 pub use resolve::ValidatedModelDir;
 pub use resolve::locate_curated_model;
-pub use resolve::probe_hf_cache_snapshot;
 pub use resolve::resolve_active_model;
 pub use resolve::resolve_model_target;
 use serde::Deserialize;
@@ -186,7 +182,7 @@ impl Embedder {
 
     pub fn embed_documents_with_progress<F>(
         &self,
-        docs: &[(String, String)],
+        docs: &[(&str, &str)],
         batch_size: usize,
         mut on_progress: F,
     ) -> Result<Vec<Vec<f32>>, EmbedError>
@@ -207,13 +203,13 @@ impl Embedder {
         let mut completed = 0usize;
 
         for idx_chunk in order.chunks(step) {
-            let current_label = idx_chunk.last().map(|&idx| docs[idx].0.as_str()).unwrap_or_default();
+            let current_label = idx_chunk.last().map(|&idx| docs[idx].0).unwrap_or_default();
             on_progress(completed, total, current_label);
 
             let prefixed: Vec<String> = idx_chunk
                 .iter()
                 .map(|&idx| {
-                    let body = truncate_for_tokenizer(&docs[idx].1, self.max_tokens);
+                    let body = truncate_for_tokenizer(docs[idx].1, self.max_tokens);
                     if self.doc_prefix.is_empty() {
                         body.to_string()
                     } else {

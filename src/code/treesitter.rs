@@ -76,7 +76,7 @@ fn extract_symbol_name(node: Node<'_>, source: &str) -> Option<SymbolName> {
     // Most tree-sitter grammars expose a `name` field on functions, structs, classes, and modules
     if let Some(name_node) = target.child_by_field_name("name")
         && let Ok(text) = name_node.utf8_text(source.as_bytes())
-        && let Ok(sym) = SymbolName::try_from(text.to_string())
+        && let Ok(sym) = SymbolName::try_from(text)
     {
         return Some(sym);
     }
@@ -85,7 +85,7 @@ fn extract_symbol_name(node: Node<'_>, source: &str) -> Option<SymbolName> {
     if target.kind() == "impl_item"
         && let Some(type_node) = target.child_by_field_name("type")
         && let Ok(text) = type_node.utf8_text(source.as_bytes())
-        && let Ok(sym) = SymbolName::try_from(text.to_string())
+        && let Ok(sym) = SymbolName::try_from(text)
     {
         return Some(sym);
     }
@@ -97,7 +97,7 @@ fn extract_symbol_name(node: Node<'_>, source: &str) -> Option<SymbolName> {
             if child.kind() == "type_spec"
                 && let Some(name_node) = child.child_by_field_name("name")
                 && let Ok(text) = name_node.utf8_text(source.as_bytes())
-                && let Ok(sym) = SymbolName::try_from(text.to_string())
+                && let Ok(sym) = SymbolName::try_from(text)
             {
                 return Some(sym);
             }
@@ -111,7 +111,7 @@ fn extract_symbol_name(node: Node<'_>, source: &str) -> Option<SymbolName> {
             if child.kind() == "recipe_header"
                 && let Some(name_node) = child.child_by_field_name("name")
                 && let Ok(text) = name_node.utf8_text(source.as_bytes())
-                && let Ok(sym) = SymbolName::try_from(text.to_string())
+                && let Ok(sym) = SymbolName::try_from(text)
             {
                 return Some(sym);
             }

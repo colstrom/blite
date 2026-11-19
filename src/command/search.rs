@@ -11,11 +11,14 @@ use thiserror::Error;
 use super::args::IndexFilterArgs;
 use super::args::RepoTargetArgs;
 use super::args::SemanticArgs;
+use crate::command::ExecuteCommand;
+use crate::command::json_command;
 use crate::drift::KitchenComparator;
 use crate::git::FileCommitHistory;
 use crate::index::IndexError;
 use crate::index::RepoIndex;
 use crate::index::SearchHit;
+use crate::render::TerminalRenderer;
 use crate::types::SearchQuery;
 
 #[derive(Debug, Error, Diagnostic)]
@@ -26,33 +29,36 @@ pub enum SearchError {
 
     #[diagnostic(code(blite::search::json))]
     Json(#[from] serde_json::Error),
+
+    #[diagnostic(transparent)]
+    Render(#[from] crate::render::RenderError),
 }
 
 #[derive(Debug, Clone, Args, Builder)]
 pub struct SearchCommand {
     /// Query string to search across repository manifests and code
-    pub query: SearchQuery,
+    pub(crate) query: SearchQuery,
 
     #[command(flatten)]
     #[builder(default)]
-    pub target: RepoTargetArgs,
+    pub(crate) target: RepoTargetArgs,
 
     /// Optional path to the kitchen repository for drift comparison
     #[arg(short, long)]
-    pub kitchen: Option<Utf8PathBuf>,
+    pub(crate) kitchen: Option<Utf8PathBuf>,
 
     /// Maximum number of matching documents to return
     #[arg(short = 'n', long, default_value_t = 10)]
     #[builder(default = 10)]
-    pub limit: usize,
+    pub(crate) limit: usize,
 
     #[command(flatten)]
     #[builder(default)]
-    pub semantic: SemanticArgs,
+    pub(crate) semantic: SemanticArgs,
 
     #[command(flatten)]
     #[builder(default)]
-    pub filter: IndexFilterArgs,
+    pub(crate) filter: IndexFilterArgs,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,36 +68,45 @@ pub struct SearchPayload {
     pub hits: Vec<SearchHit>,
 }
 
-impl SearchCommand {
-    pub fn execute(&self) -> Result<SearchPayload, SearchError> {
+impl ExecuteCommand for SearchCommand {
+    type Output = SearchPayload;
+    type Error = SearchError;
+
+    fn execute(self) -> Result<Self::Output, Self::Error> {
         let opts = self.semantic.to_build_options(&self.filter, false);
         let index = RepoIndex::build_with_options(&self.target.repo, &opts)?;
         let mut hits = index.search(&self.query, self.limit)?;
 
-        if let Some(kitchen_root) = &self.kitchen {
-            let comparator = KitchenComparator::new(&self.target.repo, kitchen_root);
-            for hit in &mut hits {
-                hit.drift = Some(comparator.compare(&hit.path));
-            }
-        }
-
+        let comparator = self
+            .kitchen
+            .as_deref()
+            .map(|kitchen_root| KitchenComparator::new(&self.target.repo, kitchen_root));
         let file_history = FileCommitHistory::build_from_dir(&self.target.repo);
-        for hit in &mut hits {
-            let commits = file_history.commits_for(&hit.path);
-            if !commits.is_empty() {
-                hit.recent_commits = commits.to_vec();
-            }
-        }
+        enrich_search_hits(&mut hits, &file_history, comparator.as_ref());
 
         Ok(SearchPayload {
-            query: self.query.clone(),
+            query: self.query,
             total_hits: hits.len(),
             hits,
         })
     }
 
-    pub fn run(self) -> Result<serde_json::Value, SearchError> {
-        let payload = self.execute()?;
-        Ok(serde_json::to_value(payload)?)
+    fn render(output: Self::Output) -> Result<Option<String>, Self::Error> {
+        let rendered = TerminalRenderer::new().render_hits(output.query.as_ref(), &output.hits)?;
+        Ok(Some(rendered))
+    }
+}
+
+json_command!(SearchCommand);
+
+pub(crate) fn enrich_search_hits(hits: &mut [SearchHit], history: &FileCommitHistory, comparator: Option<&KitchenComparator>) {
+    for hit in hits {
+        let commits = history.commits_for(&hit.path);
+        if !commits.is_empty() {
+            hit.recent_commits = commits.to_vec();
+        }
+        if let Some(comp) = comparator {
+            hit.drift = Some(comp.compare(&hit.path));
+        }
     }
 }

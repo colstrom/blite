@@ -11,6 +11,8 @@ use thiserror::Error;
 use super::args::IndexFilterArgs;
 use super::args::RepoTargetArgs;
 use super::args::SemanticArgs;
+use crate::command::ExecuteCommand;
+use crate::command::json_command;
 use crate::config::AppConfig;
 use crate::embed::EMBED_BATCH_SIZE;
 use crate::embed::EmbedError;
@@ -19,6 +21,7 @@ use crate::embed::ModelResolveOptions;
 use crate::embed::resolve_active_model;
 use crate::index::IndexError;
 use crate::index::collect_embeddable_docs;
+use crate::render::render_diagnostics;
 
 #[derive(Debug, Error, Diagnostic)]
 #[error(transparent)]
@@ -37,20 +40,20 @@ pub enum DiagnosticsError {
 pub struct DiagnosticsCommand {
     #[command(flatten)]
     #[builder(default)]
-    pub target: RepoTargetArgs,
+    pub(crate) target: RepoTargetArgs,
 
     /// Number of largest documents/chunks to display (sorted by token count descending)
     #[arg(short = 'n', long, default_value_t = 25)]
     #[builder(default = 25)]
-    pub top: usize,
+    pub(crate) top: usize,
 
     #[command(flatten)]
     #[builder(default)]
-    pub semantic: SemanticArgs,
+    pub(crate) semantic: SemanticArgs,
 
     #[command(flatten)]
     #[builder(default)]
-    pub filter: IndexFilterArgs,
+    pub(crate) filter: IndexFilterArgs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,20 +70,23 @@ pub struct DocumentDiagnostic {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticsPayload {
-    pub repo: Utf8PathBuf,
-    pub total_chunks: usize,
-    pub total_bytes: usize,
+    pub(crate) repo: Utf8PathBuf,
+    pub(crate) total_chunks: usize,
+    pub(crate) total_bytes: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    pub max_context_tokens: usize,
-    pub batch_size: usize,
-    pub multi_doc_chunks: usize,
-    pub truncated_count: usize,
-    pub entries: Vec<DocumentDiagnostic>,
+    pub(crate) model: Option<String>,
+    pub(crate) max_context_tokens: usize,
+    pub(crate) batch_size: usize,
+    pub(crate) multi_doc_chunks: usize,
+    pub(crate) truncated_count: usize,
+    pub(crate) entries: Vec<DocumentDiagnostic>,
 }
 
-impl DiagnosticsCommand {
-    pub fn execute(&self) -> Result<DiagnosticsPayload, DiagnosticsError> {
+impl ExecuteCommand for DiagnosticsCommand {
+    type Error = DiagnosticsError;
+    type Output = DiagnosticsPayload;
+
+    fn execute(self) -> Result<Self::Output, Self::Error> {
         let docs = collect_embeddable_docs(&self.target.repo, self.filter.include_vendor, self.filter.untracked)?;
         let total_chunks = docs.len();
         let total_bytes: usize = docs.iter().map(|d| d.text.len()).sum();
@@ -152,8 +158,9 @@ impl DiagnosticsCommand {
         })
     }
 
-    pub fn run(self) -> Result<serde_json::Value, DiagnosticsError> {
-        let payload = self.execute()?;
-        Ok(serde_json::to_value(payload)?)
+    fn render(output: Self::Output) -> Result<Option<String>, Self::Error> {
+        Ok(Some(render_diagnostics(&output)))
     }
 }
+
+json_command!(DiagnosticsCommand);

@@ -11,8 +11,11 @@ pub use exec::ModelsPayload;
 use miette::Diagnostic;
 use thiserror::Error;
 
+use crate::command::ExecuteCommand;
+use crate::command::json_command;
 use crate::config::ConfigError;
 use crate::embed::EmbedError;
+use crate::render::render_models_table;
 
 #[derive(Debug, Error, Diagnostic)]
 #[error(transparent)]
@@ -35,7 +38,7 @@ pub enum ModelsError {
 #[derive(Debug, Clone, Args, Builder)]
 pub struct ModelsCommand {
     #[command(subcommand)]
-    pub(super) action: Option<ModelsAction>,
+    pub(crate) action: Option<ModelsAction>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -61,24 +64,24 @@ pub enum ModelsAction {
 #[derive(Debug, Clone, Args, Builder)]
 pub struct ModelRemoveArgs {
     /// Curated model ID to remove from blite's local models directory
-    pub model: String,
+    pub(crate) model: String,
 }
 
 #[derive(Debug, Clone, Args, Builder)]
 pub struct ModelInfoArgs {
     /// Curated model ID (e.g. `granite-30m`, `mxbai-xsmall`, `nomic-v1.5`)
-    pub model: String,
+    pub(crate) model: String,
 }
 
 #[derive(Debug, Clone, Args, Builder)]
 pub struct ModelDownloadArgs {
     /// Curated model ID to download (see `blite models list`)
-    pub model: String,
+    pub(crate) model: String,
 
     /// Download the model without setting it as the active model in config
     #[arg(long)]
     #[builder(default = false)]
-    pub no_activate: bool,
+    pub(crate) no_activate: bool,
 }
 
 #[derive(Debug, Clone, Args, Builder)]
@@ -89,12 +92,12 @@ pub struct ModelUseArgs {
                      - config.json (HuggingFace BertModel or NomicBertModel config)\n\
                      - tokenizer.json (HuggingFace fast tokenizer file)\n\
                      - model.safetensors (Safetensors weights)")]
-    pub target: String,
+    pub(crate) target: String,
 
     /// Allow resolving the model from the local HuggingFace Hub cache if not in blite's models directory
     #[arg(long)]
     #[builder(default = false)]
-    pub allow_hf_cache: bool,
+    pub(crate) allow_hf_cache: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -107,16 +110,20 @@ pub enum HfCacheConsent {
 pub struct HfCacheArgs {
     /// Set to `enable` to allow probing `~/.cache/huggingface/hub`, or `disable` to forbid it
     #[arg(value_enum)]
-    pub consent: HfCacheConsent,
+    pub(crate) consent: HfCacheConsent,
 }
 
-impl ModelsCommand {
-    pub fn execute(&self) -> Result<ModelsPayload, ModelsError> {
-        exec::execute(self)
+impl ExecuteCommand for ModelsCommand {
+    type Error = ModelsError;
+    type Output = ModelsPayload;
+
+    fn execute(self) -> Result<Self::Output, Self::Error> {
+        exec::execute(&self)
     }
 
-    pub fn run(self) -> Result<serde_json::Value, ModelsError> {
-        let payload = self.execute()?;
-        Ok(serde_json::to_value(payload)?)
+    fn render(output: Self::Output) -> Result<Option<String>, Self::Error> {
+        Ok(Some(render_models_table(&output)))
     }
 }
+
+json_command!(ModelsCommand);

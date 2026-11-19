@@ -14,6 +14,8 @@ pub(crate) mod render;
 pub(crate) mod types;
 
 pub use command::Command;
+pub use command::JsonCommand;
+pub use command::RunCommand;
 pub use error::Error;
 pub use types::SearchQuery;
 

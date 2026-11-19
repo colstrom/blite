@@ -183,19 +183,9 @@ pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> R
 pub fn resolve_model_target(target: Option<&str>, allow_hf_cache: bool) -> Result<ResolvedModel, EmbedError> {
     let config = AppConfig::load()?;
 
-    if let Some(target) = target {
-        let path = Utf8Path::new(target);
-        if path.is_dir() {
-            return resolve_active_model(
-                &config,
-                &ModelResolveOptions {
-                    override_model_dir: Some(path.to_path_buf()),
-                    allow_hf_cache_override: allow_hf_cache,
-                },
-            )?
-            .ok_or(EmbedError::ModelUnavailable);
-        }
-
+    if let Some(target) = target
+        && !Utf8Path::new(target).is_dir()
+    {
         let spec = find_model_spec(target).ok_or_else(|| EmbedError::UnknownModel(target.to_string()))?;
         let hf_consented = allow_hf_cache || config.allow_hf_cache;
         return locate_curated_model(spec, hf_consented)
@@ -203,17 +193,18 @@ pub fn resolve_model_target(target: Option<&str>, allow_hf_cache: bool) -> Resul
             .ok_or(EmbedError::ModelUnavailable);
     }
 
+    let override_model_dir = target.map(Utf8PathBuf::from);
     resolve_active_model(
         &config,
         &ModelResolveOptions {
-            override_model_dir: None,
+            override_model_dir,
             allow_hf_cache_override: allow_hf_cache,
         },
     )?
     .ok_or(EmbedError::ModelUnavailable)
 }
 
-pub fn probe_hf_cache_snapshot(hf_repo: &str) -> Option<ValidatedModelDir> {
+pub(crate) fn probe_hf_cache_snapshot(hf_repo: &str) -> Option<ValidatedModelDir> {
     let hub_dir = std::env::var("HF_HOME")
         .ok()
         .map(|h| Utf8PathBuf::from(h).join("hub"))

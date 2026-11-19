@@ -60,7 +60,7 @@ pub(super) fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayl
             cached_hits += 1;
         } else {
             uncached_hashes.push(hash);
-            uncached_docs.push((doc.label.clone(), doc.text.clone()));
+            uncached_docs.push((doc.label.as_str(), doc.text.as_str()));
         }
     }
 

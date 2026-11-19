@@ -95,7 +95,7 @@ pub(super) fn walk_repo_commits(root: &Utf8Path, normalize_prefix: bool) -> Resu
         let Ok(commit) = info.object() else { continue };
 
         let oid_str = commit.id.to_string();
-        let Ok(oid) = CommitOid::try_from(oid_str.clone()) else {
+        let Ok(oid) = CommitOid::try_from(oid_str.as_str()) else {
             continue;
         };
         let short_oid = oid_str.chars().take(8).collect();

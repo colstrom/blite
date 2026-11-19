@@ -27,9 +27,81 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::render::RenderError;
-use crate::render::TerminalRenderer;
-use crate::render::render_diagnostics;
-use crate::render::render_models_table;
+
+#[doc(hidden)]
+pub trait ExecuteCommand: Sized {
+    type Output;
+    type Error: std::error::Error;
+
+    fn execute(self) -> Result<Self::Output, Self::Error>;
+
+    /// Formats `Output` for terminal display. Return `Ok(None)` if `execute` already handled output.
+    fn render(output: Self::Output) -> Result<Option<String>, Self::Error> {
+        let _ = output;
+        Ok(None)
+    }
+}
+
+pub trait RunCommand {
+    type Error: std::error::Error;
+    fn run(self) -> Result<(), Self::Error>;
+}
+
+impl<T: ExecuteCommand> RunCommand for T {
+    type Error = T::Error;
+
+    fn run(self) -> Result<(), Self::Error> {
+        let output = self.execute()?;
+        if let Some(rendered) = T::render(output)? {
+            print!("{rendered}");
+        }
+        Ok(())
+    }
+}
+
+pub trait JsonCommand {
+    type Error: std::error::Error;
+    fn json(self) -> Result<serde_json::Value, Self::Error>;
+}
+
+impl<T> JsonCommand for T
+where
+    T: ExecuteCommand,
+    T::Output: Serialize,
+    serde_json::Error: Into<T::Error>,
+{
+    type Error = T::Error;
+
+    fn json(self) -> Result<serde_json::Value, Self::Error> {
+        let output = self.execute()?;
+        serde_json::to_value(output).map_err(Into::into)
+    }
+}
+
+macro_rules! runnable {
+    ($T:ty) => {
+        impl $T {
+            pub fn run(self) -> Result<(), <Self as $crate::command::RunCommand>::Error> {
+                <Self as $crate::command::RunCommand>::run(self)
+            }
+        }
+    };
+}
+
+macro_rules! json_command {
+    ($T:ty) => {
+        crate::command::runnable!($T);
+
+        impl $T {
+            pub fn json(self) -> Result<serde_json::Value, <Self as $crate::command::JsonCommand>::Error> {
+                <Self as $crate::command::JsonCommand>::json(self)
+            }
+        }
+    };
+}
+
+pub(crate) use json_command;
+pub(crate) use runnable;
 
 #[derive(Debug, Error, Diagnostic)]
 #[error(transparent)]
@@ -59,12 +131,6 @@ pub enum CommandError {
     Json(#[from] serde_json::Error),
 }
 
-enum CommandOutput {
-    Json(serde_json::Value),
-    Text(String),
-    Silent,
-}
-
 /// Boring Local Information Telling Engine.
 ///
 /// Tells you things you might want to know using information you already have.
@@ -75,11 +141,11 @@ pub struct Command {
     /// Emit machine-readable JSON instead of syntax-highlighted terminal output
     #[arg(long, global = true)]
     #[builder(default = false)]
-    pub json: bool,
+    pub(crate) json: bool,
 
     #[command(flatten)]
     #[builder(default)]
-    pub repl: ReplCommand,
+    pub(crate) repl: ReplCommand,
 
     #[command(subcommand)]
     subcommand: Option<Subcommand>,
@@ -101,58 +167,40 @@ pub enum Subcommand {
     Repl(ReplCommand),
 }
 
-impl Command {
-    pub fn run(self) -> Result<(), crate::Error> {
-        let output = self.execute().map_err(CommandError::from)?;
-        match output {
-            CommandOutput::Json(value) => println!("{}", serde_json::to_string_pretty(&value)?),
-            CommandOutput::Text(rendered) => print!("{rendered}"),
-            CommandOutput::Silent => {}
-        }
-        Ok(())
-    }
+impl RunCommand for Command {
+    type Error = crate::Error;
 
-    fn execute(self) -> Result<CommandOutput, CommandError> {
-        let json = self.json;
-        match self.subcommand {
-            Some(Subcommand::Search(cmd)) => render_or_json(json, cmd.execute(), |payload| {
-                Ok(TerminalRenderer::new().render_hits(payload.query.as_ref(), &payload.hits)?)
-            }),
-            Some(Subcommand::History(cmd)) => render_or_json(json, cmd.execute(), |payload| {
-                Ok(TerminalRenderer::new().render_commit_hits(payload.query.as_ref(), &payload.hits))
-            }),
-            Some(Subcommand::Models(cmd)) => render_or_json(json, cmd.execute(), |payload| Ok(render_models_table(&payload))),
-            Some(Subcommand::Embeddings(cmd)) => {
-                let value = cmd.run()?;
-                if json {
-                    Ok(CommandOutput::Json(value))
-                } else {
-                    Ok(CommandOutput::Silent)
-                }
-            }
-            Some(Subcommand::Diagnostics(cmd)) => render_or_json(json, cmd.execute(), |payload| Ok(render_diagnostics(&payload))),
-            Some(Subcommand::Repl(cmd)) => {
-                cmd.run()?;
-                Ok(CommandOutput::Silent)
-            }
-            None => {
-                self.repl.run()?;
-                Ok(CommandOutput::Silent)
-            }
-        }
+    fn run(self) -> Result<(), crate::Error> {
+        run_top_level(self).map_err(Into::into)
     }
 }
 
-fn render_or_json<T, E, F>(json: bool, payload: Result<T, E>, render: F) -> Result<CommandOutput, CommandError>
-where
-    T: Serialize,
-    E: Into<CommandError>,
-    F: FnOnce(T) -> Result<String, CommandError>,
-{
-    let payload = payload.map_err(Into::into)?;
-    if json {
-        Ok(CommandOutput::Json(serde_json::to_value(payload)?))
-    } else {
-        Ok(CommandOutput::Text(render(payload)?))
+runnable!(Command);
+
+fn run_top_level(cmd: Command) -> Result<(), CommandError> {
+    let as_json = cmd.json;
+    match cmd.subcommand {
+        Some(Subcommand::Search(sub)) => dispatch_json_or_run(as_json, sub),
+        Some(Subcommand::History(sub)) => dispatch_json_or_run(as_json, sub),
+        Some(Subcommand::Models(sub)) => dispatch_json_or_run(as_json, sub),
+        Some(Subcommand::Embeddings(sub)) => dispatch_json_or_run(as_json, sub),
+        Some(Subcommand::Diagnostics(sub)) => dispatch_json_or_run(as_json, sub),
+        Some(Subcommand::Repl(sub)) => Ok(sub.run()?),
+        None => Ok(cmd.repl.run()?),
     }
+}
+
+fn dispatch_json_or_run<T>(as_json: bool, cmd: T) -> Result<(), CommandError>
+where
+    T: JsonCommand + RunCommand,
+    <T as JsonCommand>::Error: Into<CommandError>,
+    <T as RunCommand>::Error: Into<CommandError>,
+{
+    if as_json {
+        let value = cmd.json().map_err(Into::into)?;
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        cmd.run().map_err(Into::into)?;
+    }
+    Ok(())
 }

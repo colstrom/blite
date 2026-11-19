@@ -32,6 +32,7 @@ pub(super) struct IndexSchema {
     pub symbol: Field,
     pub line_start: Field,
     pub line_end: Field,
+    pub doc_index: Field,
 }
 
 impl IndexSchema {
@@ -49,6 +50,7 @@ impl IndexSchema {
             symbol: builder.add_text_field("symbol", TEXT | STORED),
             line_start: builder.add_u64_field("line_start", STORED),
             line_end: builder.add_u64_field("line_end", STORED),
+            doc_index: builder.add_u64_field("doc_index", INDEXED | STORED),
         };
         (builder.build(), fields)
     }
@@ -104,6 +106,10 @@ impl IndexSchema {
             document.add_u64(self.line_end, lines.end as u64);
         }
 
+        if let Some(doc_index) = item.doc_index {
+            document.add_u64(self.doc_index, doc_index as u64);
+        }
+
         document
     }
 
@@ -117,6 +123,7 @@ impl IndexSchema {
             .and_then(|v| v.as_str())
             .and_then(|s| SymbolName::try_from(s.to_string()).ok());
         let lines = self.extract_lines(doc);
+        let doc_index = doc.get_first(self.doc_index).and_then(|v| v.as_u64()).map(|n| n as usize);
 
         let resolved_vars = if k8s.is_some() {
             substitutions.resolve_in_content(&content)
@@ -130,6 +137,7 @@ impl IndexSchema {
             k8s,
             symbol,
             lines,
+            doc_index,
             resolved_vars,
             recent_commits: Vec::new(),
             content,

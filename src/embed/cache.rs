@@ -24,7 +24,7 @@ pub(super) fn hash_embed_text(prefix: &str, text: &str) -> u64 {
     fnv1a_64_parts([prefix.as_bytes(), b"\0", text.as_bytes()])
 }
 
-pub fn embedding_cache_dir() -> Option<Utf8PathBuf> {
+pub(crate) fn embedding_cache_dir() -> Option<Utf8PathBuf> {
     let base = dirs::cache_dir()?;
     Utf8PathBuf::try_from(base).ok().map(|dir| dir.join("blite").join("embeddings"))
 }
@@ -165,11 +165,6 @@ pub fn write_embedding_cache(path: &Utf8Path, entries: &HashMap<u64, Vec<f32>>) 
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
-
-    use camino::Utf8Path;
-    use camino::Utf8PathBuf;
 
     use super::CACHE_MAGIC;
     use super::CACHE_VERSION;
@@ -177,32 +172,7 @@ mod tests {
     use super::prune_embedding_cache_file;
     use super::read_embedding_cache;
     use super::write_embedding_cache;
-
-    static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    struct TempDir(Utf8PathBuf);
-
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            let id = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let dir = Utf8PathBuf::try_from(std::env::temp_dir())
-                .expect("UTF-8 temp dir")
-                .join(format!("blite-test-{label}-{}-{id}", std::process::id()));
-            let _ = fs_err::remove_dir_all(&dir);
-            fs_err::create_dir_all(&dir).expect("create temp test dir");
-            Self(dir)
-        }
-
-        fn path(&self) -> &Utf8Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs_err::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_util::TempDir;
 
     #[test]
     fn round_trips_embeddings_through_binary_cache() {
