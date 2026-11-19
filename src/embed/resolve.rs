@@ -99,6 +99,59 @@ pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> R
     Ok(None)
 }
 
+/// Resolves an explicit CLI model target (directory path or curated model ID) or falls back
+/// to the active configured model, failing with `EmbedError::ModelUnavailable` if not installed.
+pub fn resolve_model_target(target: Option<&str>, allow_hf_cache: bool) -> Result<ResolvedModel, EmbedError> {
+    let config = AppConfig::load()?;
+
+    if let Some(target) = target {
+        let path = Utf8Path::new(target);
+        if path.is_dir() {
+            return resolve_active_model(
+                &config,
+                &ModelResolveOptions {
+                    override_model_dir: Some(path.to_path_buf()),
+                    allow_hf_cache_override: allow_hf_cache,
+                },
+            )?
+            .ok_or(EmbedError::ModelUnavailable);
+        }
+
+        let spec = find_model_spec(target).ok_or_else(|| EmbedError::UnknownModel(target.to_string()))?;
+        let app_dir = AppConfig::models_dir()?.join(spec.id);
+        if app_dir.is_dir() && validate_model_dir(&app_dir).is_ok() {
+            return Ok(ResolvedModel {
+                label: spec.id.to_string(),
+                dir: app_dir,
+                query_prefix: spec.query_prefix.to_string(),
+                doc_prefix: spec.doc_prefix.to_string(),
+            });
+        }
+
+        if (allow_hf_cache || config.allow_hf_cache)
+            && let Some(hf_dir) = probe_hf_cache_snapshot(spec.hf_repo)
+        {
+            return Ok(ResolvedModel {
+                label: format!("{} (hf-cache)", spec.id),
+                dir: hf_dir,
+                query_prefix: spec.query_prefix.to_string(),
+                doc_prefix: spec.doc_prefix.to_string(),
+            });
+        }
+
+        return Err(EmbedError::ModelUnavailable);
+    }
+
+    resolve_active_model(
+        &config,
+        &ModelResolveOptions {
+            override_model_dir: None,
+            allow_hf_cache_override: allow_hf_cache,
+        },
+    )?
+    .ok_or(EmbedError::ModelUnavailable)
+}
+
 pub fn probe_hf_cache_snapshot(hf_repo: &str) -> Option<Utf8PathBuf> {
     let hub_dir = std::env::var("HF_HOME")
         .ok()

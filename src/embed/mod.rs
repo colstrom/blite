@@ -2,6 +2,7 @@
 
 mod cache;
 mod catalog;
+mod download;
 mod error;
 mod hnsw;
 mod resolve;
@@ -23,6 +24,7 @@ use candle_transformers::models::nomic_bert::NomicBertModel;
 pub use catalog::MODEL_CATALOG;
 pub use catalog::ModelSpec;
 pub use catalog::find_model_spec;
+pub use download::download_curated_model;
 pub use error::EmbedError;
 pub use hnsw::SemanticIndex;
 pub use resolve::ModelResolveOptions;
@@ -30,6 +32,7 @@ pub use resolve::REQUIRED_MODEL_FILES;
 pub use resolve::ResolvedModel;
 pub use resolve::probe_hf_cache_snapshot;
 pub use resolve::resolve_active_model;
+pub use resolve::resolve_model_target;
 pub use resolve::validate_model_dir;
 use serde::Deserialize;
 use tokenizers::PaddingParams;
