@@ -4,9 +4,11 @@ mod helper;
 mod history;
 pub mod session;
 
+use std::borrow::Cow;
 use std::time::Instant;
 
 use bon::Builder;
+use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use clap::Args;
 use helper::ReplHelper;
@@ -79,8 +81,10 @@ impl Default for ReplCommand {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum ReplAction {
     Continue,
+    Message(Cow<'static, str>),
     Exit,
     Reload,
     SetLimit(usize),
@@ -91,41 +95,15 @@ enum ReplAction {
 }
 
 impl ReplCommand {
-    pub fn run(self) -> Result<serde_json::Value, ReplError> {
+    pub fn run(self) -> Result<(), ReplError> {
         let start = Instant::now();
         let build_opts = self.semantic.to_build_options(&self.filter, true);
         let mut session = ReplSession::new(self.target.repo.clone(), self.kitchen.as_deref(), self.limit, build_opts)?;
         let renderer = TerminalRenderer::new();
 
-        let rl_config = Config::builder()
-            .max_history_size(1_000)?
-            .history_ignore_dups(true)?
-            .history_ignore_space(true)
-            .completion_type(CompletionType::List)
-            .build();
-        let mut rl: Editor<ReplHelper, DefaultHistory> = Editor::with_config(rl_config)?;
-        let mut helper = ReplHelper::default();
-        helper.update_from_index(session.index());
-        rl.set_helper(Some(helper));
-
         let history_path = HistoryTarget::from_args(&self.history, &self.target.repo).resolve_path();
-        if let Some(path) = &history_path {
-            load_history(&mut rl, path);
-        }
-
-        let history_status = history_path.as_deref().map_or("disabled", |p| p.as_str());
-        let semantic_status = match session.index().active_semantic_info() {
-            Some((model, device)) => format!("{model} on {device}"),
-            None => "lexical only".to_string(),
-        };
-
-        eprintln!(
-            "\x1b[1;32mIndexed {}\x1b[0m in {:.0?} \x1b[2m(search: {}, history: {})\x1b[0m\nType :help for commands, :exit to quit",
-            self.target.repo,
-            start.elapsed(),
-            semantic_status,
-            history_status,
-        );
+        let mut rl = init_editor(&session, history_path.as_deref())?;
+        print_startup_banner(&self.target.repo, start, &session, history_path.as_deref());
 
         loop {
             match rl.readline("\x1b[1;34mblite>\x1b[0m ") {
@@ -138,50 +116,9 @@ impl ReplCommand {
                         let _ = rl.add_history_entry(trimmed);
                     }
 
-                    match parse_input(trimmed) {
-                        ReplAction::Continue => {}
-                        ReplAction::Exit => break,
-                        ReplAction::Help => print_help(),
-                        ReplAction::SetLimit(new_limit) => {
-                            session.set_limit(new_limit);
-                            eprintln!("Result limit set to {new_limit}.");
-                        }
-                        ReplAction::Reload => {
-                            let reload_start = Instant::now();
-                            match session.reload() {
-                                Ok(()) => {
-                                    if let Some(helper) = rl.helper_mut() {
-                                        helper.update_from_index(session.index());
-                                    }
-                                    eprintln!("Reloaded index in {:.0?}.", reload_start.elapsed());
-                                }
-                                Err(err) => {
-                                    eprintln!("\x1b[1;31mReload failed:\x1b[0m {err}");
-                                }
-                            }
-                        }
-                        ReplAction::History(query) => match session.search_history(&query) {
-                            Ok(hits) => {
-                                let rendered = renderer.render_commit_hits(query.as_ref(), &hits);
-                                print!("{rendered}");
-                            }
-                            Err(err) => {
-                                eprintln!("\x1b[1;31mHistory error:\x1b[0m {err}");
-                            }
-                        },
-                        ReplAction::HistoryPath => match &history_path {
-                            Some(path) => eprintln!("REPL history: {path}"),
-                            None => eprintln!("REPL history: disabled"),
-                        },
-                        ReplAction::Search(query) => match session.search(&query) {
-                            Ok(hits) => {
-                                let rendered = renderer.render_hits(query.as_ref(), &hits)?;
-                                print!("{rendered}");
-                            }
-                            Err(err) => {
-                                eprintln!("\x1b[1;31mQuery error:\x1b[0m {err}");
-                            }
-                        },
+                    let action = parse_input(trimmed);
+                    if !handle_action(action, &mut session, &mut rl, &renderer, history_path.as_deref())? {
+                        break;
                     }
                 }
                 Err(ReadlineError::Interrupted) => continue,
@@ -194,43 +131,130 @@ impl ReplCommand {
             save_history(&mut rl, path);
         }
 
-        Ok(serde_json::json!({ "status": "exited" }))
+        Ok(())
     }
+}
+
+fn init_editor(session: &ReplSession, history_path: Option<&Utf8Path>) -> Result<Editor<ReplHelper, DefaultHistory>, ReplError> {
+    let rl_config = Config::builder()
+        .max_history_size(1_000)?
+        .history_ignore_dups(true)?
+        .history_ignore_space(true)
+        .completion_type(CompletionType::List)
+        .build();
+
+    let mut rl: Editor<ReplHelper, DefaultHistory> = Editor::with_config(rl_config)?;
+    let mut helper = ReplHelper::default();
+    helper.update_from_index(session.index());
+    rl.set_helper(Some(helper));
+
+    if let Some(path) = history_path {
+        load_history(&mut rl, path);
+    }
+
+    Ok(rl)
+}
+
+fn print_startup_banner(repo: &Utf8Path, start: Instant, session: &ReplSession, history_path: Option<&Utf8Path>) {
+    let history_status = history_path.map_or("disabled", Utf8Path::as_str);
+    let semantic_status = match session.index().active_semantic_info() {
+        Some((model, device)) => format!("{model} on {device}"),
+        None => "lexical only".to_string(),
+    };
+
+    eprintln!(
+        "\x1b[1;32mIndexed {}\x1b[0m in {:.0?} \x1b[2m(search: {}, history: {})\x1b[0m\nType :help for commands, :exit to quit",
+        repo,
+        start.elapsed(),
+        semantic_status,
+        history_status,
+    );
+}
+
+/// Dispatches a parsed `ReplAction`, returning `Ok(true)` to continue the loop or `Ok(false)` to exit.
+fn handle_action(
+    action: ReplAction,
+    session: &mut ReplSession,
+    rl: &mut Editor<ReplHelper, DefaultHistory>,
+    renderer: &TerminalRenderer,
+    history_path: Option<&Utf8Path>,
+) -> Result<bool, ReplError> {
+    match action {
+        ReplAction::Continue => {}
+        ReplAction::Message(msg) => eprintln!("{msg}"),
+        ReplAction::Exit => return Ok(false),
+        ReplAction::Help => print_help(),
+        ReplAction::SetLimit(new_limit) => {
+            session.set_limit(new_limit);
+            eprintln!("Result limit set to {new_limit}.");
+        }
+        ReplAction::Reload => {
+            let reload_start = Instant::now();
+            match session.reload() {
+                Ok(()) => {
+                    if let Some(helper) = rl.helper_mut() {
+                        helper.update_from_index(session.index());
+                    }
+                    eprintln!("Reloaded index in {:.0?}.", reload_start.elapsed());
+                }
+                Err(err) => {
+                    eprintln!("\x1b[1;31mReload failed:\x1b[0m {err}");
+                }
+            }
+        }
+        ReplAction::History(query) => match session.search_history(&query) {
+            Ok(hits) => {
+                let rendered = renderer.render_commit_hits(query.as_ref(), &hits);
+                print!("{rendered}");
+            }
+            Err(err) => {
+                eprintln!("\x1b[1;31mHistory error:\x1b[0m {err}");
+            }
+        },
+        ReplAction::HistoryPath => match history_path {
+            Some(path) => eprintln!("REPL history: {path}"),
+            None => eprintln!("REPL history: disabled"),
+        },
+        ReplAction::Search(query) => match session.search(&query) {
+            Ok(hits) => {
+                let rendered = renderer.render_hits(query.as_ref(), &hits)?;
+                print!("{rendered}");
+            }
+            Err(err) => {
+                eprintln!("\x1b[1;31mQuery error:\x1b[0m {err}");
+            }
+        },
+    }
+
+    Ok(true)
 }
 
 fn parse_input(input: &str) -> ReplAction {
     if let Some(cmd) = input.strip_prefix(':') {
         let mut parts = cmd.split_whitespace();
-        match parts.next().unwrap_or_default() {
-            "exit" | "quit" | "q" => return ReplAction::Exit,
-            "reload" | "r" => return ReplAction::Reload,
-            "help" | "h" | "?" => return ReplAction::Help,
+        return match parts.next().unwrap_or_default() {
+            "exit" | "quit" | "q" => ReplAction::Exit,
+            "reload" | "r" => ReplAction::Reload,
+            "help" | "h" | "?" => ReplAction::Help,
             "history" | "git" | "log" => {
                 let rest: String = parts.collect::<Vec<_>>().join(" ");
-                if let Ok(query) = SearchQuery::try_from(rest) {
-                    return ReplAction::History(query);
+                match SearchQuery::try_from(rest) {
+                    Ok(query) => ReplAction::History(query),
+                    Err(_) => ReplAction::Message(Cow::Borrowed("Usage: :history <query>")),
                 }
-                eprintln!("Usage: :history <query>");
-                return ReplAction::Continue;
             }
-            "history-path" | "history-file" | "hp" => return ReplAction::HistoryPath,
-            "limit" => {
-                if let Some(n) = parts.next().and_then(|s| s.parse::<usize>().ok())
-                    && n > 0
-                {
-                    return ReplAction::SetLimit(n);
-                }
-                eprintln!("Usage: :limit <positive integer>");
-                return ReplAction::Continue;
-            }
-            other => {
-                eprintln!("Unknown command ':{other}'. Type :help for available commands.");
-                return ReplAction::Continue;
-            }
-        }
+            "history-path" | "history-file" | "hp" => ReplAction::HistoryPath,
+            "limit" => match parts.next().and_then(|s| s.parse::<usize>().ok()) {
+                Some(n) if n > 0 => ReplAction::SetLimit(n),
+                _ => ReplAction::Message(Cow::Borrowed("Usage: :limit <positive integer>")),
+            },
+            other => ReplAction::Message(Cow::Owned(format!(
+                "Unknown command ':{other}'. Type :help for available commands."
+            ))),
+        };
     }
 
-    match SearchQuery::try_from(input.to_string()) {
+    match SearchQuery::try_from(input) {
         Ok(query) => ReplAction::Search(query),
         Err(_) => ReplAction::Continue,
     }
@@ -248,4 +272,65 @@ Commands:
   :help             Show this help message
   :exit             Exit the REPL (or press Ctrl+D)"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::ReplAction;
+    use super::parse_input;
+    use crate::types::SearchQuery;
+
+    #[test]
+    fn parses_repl_meta_commands_and_aliases() {
+        assert_eq!(parse_input(":exit"), ReplAction::Exit);
+        assert_eq!(parse_input(":quit"), ReplAction::Exit);
+        assert_eq!(parse_input(":q"), ReplAction::Exit);
+
+        assert_eq!(parse_input(":reload"), ReplAction::Reload);
+        assert_eq!(parse_input(":r"), ReplAction::Reload);
+
+        assert_eq!(parse_input(":help"), ReplAction::Help);
+        assert_eq!(parse_input(":h"), ReplAction::Help);
+        assert_eq!(parse_input(":?"), ReplAction::Help);
+
+        assert_eq!(parse_input(":history-path"), ReplAction::HistoryPath);
+        assert_eq!(parse_input(":hp"), ReplAction::HistoryPath);
+    }
+
+    #[test]
+    fn parses_parameterized_commands_and_usage_errors() {
+        assert_eq!(parse_input(":limit 15"), ReplAction::SetLimit(15));
+        assert_eq!(
+            parse_input(":limit 0"),
+            ReplAction::Message(Cow::Borrowed("Usage: :limit <positive integer>"))
+        );
+        assert_eq!(
+            parse_input(":limit abc"),
+            ReplAction::Message(Cow::Borrowed("Usage: :limit <positive integer>"))
+        );
+
+        assert_eq!(
+            parse_input(":history flux-system"),
+            ReplAction::History(SearchQuery::try_from("flux-system").unwrap())
+        );
+        assert_eq!(parse_input(":git "), ReplAction::Message(Cow::Borrowed("Usage: :history <query>")));
+
+        assert_eq!(
+            parse_input(":bogus"),
+            ReplAction::Message(Cow::Owned(
+                "Unknown command ':bogus'. Type :help for available commands.".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_regular_queries_and_blank_inputs() {
+        assert_eq!(
+            parse_input("kind:Deployment web"),
+            ReplAction::Search(SearchQuery::try_from("kind:Deployment web").unwrap())
+        );
+        assert_eq!(parse_input("   "), ReplAction::Continue);
+    }
 }
