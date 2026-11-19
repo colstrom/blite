@@ -2,6 +2,8 @@
 
 mod cache;
 mod catalog;
+mod error;
+mod hnsw;
 mod resolve;
 
 pub use cache::compute_doc_embed_hash;
@@ -10,7 +12,6 @@ pub use cache::embedding_cache_path;
 pub use cache::hash_doc_with_prefix;
 pub use cache::read_embedding_cache;
 pub use cache::write_embedding_cache;
-use camino::Utf8PathBuf;
 use candle_core::DType;
 use candle_core::Device;
 use candle_core::Tensor;
@@ -22,11 +23,8 @@ use candle_transformers::models::nomic_bert::NomicBertModel;
 pub use catalog::MODEL_CATALOG;
 pub use catalog::ModelSpec;
 pub use catalog::find_model_spec;
-use instant_distance::Builder as HnswBuilder;
-use instant_distance::HnswMap;
-use instant_distance::Point;
-use instant_distance::Search;
-use miette::Diagnostic;
+pub use error::EmbedError;
+pub use hnsw::SemanticIndex;
 pub use resolve::ModelResolveOptions;
 pub use resolve::REQUIRED_MODEL_FILES;
 pub use resolve::ResolvedModel;
@@ -34,66 +32,16 @@ pub use resolve::probe_hf_cache_snapshot;
 pub use resolve::resolve_active_model;
 pub use resolve::validate_model_dir;
 use serde::Deserialize;
-use thiserror::Error;
 use tokenizers::PaddingParams;
 use tokenizers::Tokenizer;
 use tokenizers::TruncationParams;
 use tracing::debug;
 use tracing::instrument;
 
-use crate::config::ConfigError;
-
 #[cfg(target_os = "macos")]
 pub const EMBED_BATCH_SIZE: usize = 64;
 #[cfg(not(target_os = "macos"))]
 pub const EMBED_BATCH_SIZE: usize = 32;
-
-#[derive(Debug, Error, Diagnostic)]
-pub enum EmbedError {
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    Config(#[from] ConfigError),
-
-    #[error("failed to read model file")]
-    #[diagnostic(code(blite::embed::io))]
-    Io(#[from] std::io::Error),
-
-    #[error("unknown model '{0}'; run `blite models list` to inspect available models")]
-    #[diagnostic(code(blite::embed::unknown_model))]
-    UnknownModel(String),
-
-    #[error("model directory '{path}' is missing required file '{missing}'")]
-    #[diagnostic(
-        code(blite::embed::incomplete_model_dir),
-        help("A valid model directory must contain config.json, tokenizer.json, and model.safetensors.")
-    )]
-    IncompleteModelDir { path: Utf8PathBuf, missing: String },
-
-    #[error("semantic search was explicitly requested, but no embedding model is configured or installed")]
-    #[diagnostic(
-        code(blite::embed::model_unavailable),
-        help(
-            "Run `blite models list` and `blite models download <model-id>` (or pass `--model-dir <path>`), or omit `--semantic` to fall back to lexical search."
-        )
-    )]
-    ModelUnavailable,
-
-    #[error("failed to parse model configuration JSON: {0}")]
-    #[diagnostic(code(blite::embed::model_config))]
-    ModelConfig(#[from] serde_json::Error),
-
-    #[error("tokenizer error: {0}")]
-    #[diagnostic(code(blite::embed::tokenizer))]
-    Tokenizer(String),
-
-    #[error("candle tensor/model execution error: {0}")]
-    #[diagnostic(code(blite::embed::candle))]
-    Candle(#[from] candle_core::Error),
-
-    #[error("huggingface hub download error: {0}")]
-    #[diagnostic(code(blite::embed::hf_hub))]
-    HfHub(String),
-}
 
 pub(super) fn truncate_for_tokenizer(text: &str, max_tokens: usize) -> &str {
     let byte_budget = max_tokens.saturating_mul(6);
@@ -328,97 +276,4 @@ fn select_device() -> Device {
     }
 
     Device::Cpu
-}
-
-#[derive(Debug, Clone)]
-struct EmbeddingPoint(Vec<f32>);
-
-impl Point for EmbeddingPoint {
-    fn distance(&self, other: &Self) -> f32 {
-        let dot: f32 = self.0.iter().zip(other.0.iter()).map(|(a, b)| a * b).sum();
-        (1.0 - dot).max(0.0)
-    }
-}
-
-pub struct SemanticIndex {
-    embedder: Embedder,
-    hnsw: HnswMap<EmbeddingPoint, usize>,
-    pub model_label: String,
-    pub device_label: &'static str,
-}
-
-impl SemanticIndex {
-    #[instrument(skip_all, fields(doc_count = docs.len(), model = %resolved.label, use_cache))]
-    pub fn build_with_progress<F>(
-        resolved: &ResolvedModel,
-        docs: &[(String, String)],
-        use_cache: bool,
-        mut on_progress: F,
-    ) -> Result<Self, EmbedError>
-    where
-        F: FnMut(usize, usize, &str),
-    {
-        let embedder = Embedder::load(resolved)?;
-        let device_label = embedder.device_label();
-
-        let cache_path = if use_cache { embedding_cache_path(&resolved.label) } else { None };
-        let mut cache = cache_path.as_deref().map(read_embedding_cache).unwrap_or_default();
-
-        let mut vectors = vec![Vec::new(); docs.len()];
-        let mut uncached_indices = Vec::new();
-        let mut uncached_docs = Vec::new();
-        let mut doc_hashes = Vec::with_capacity(docs.len());
-
-        for (idx, (label, text)) in docs.iter().enumerate() {
-            let truncated = truncate_for_tokenizer(text, embedder.max_tokens());
-            let hash = cache::hash_embed_text(&embedder.doc_prefix, truncated);
-            doc_hashes.push(hash);
-
-            if let Some(cached_vec) = cache.get(&hash) {
-                vectors[idx] = cached_vec.clone();
-            } else {
-                uncached_indices.push(idx);
-                uncached_docs.push((label.clone(), text.clone()));
-            }
-        }
-
-        if !uncached_docs.is_empty() {
-            let fresh_vecs = embedder.embed_documents_with_progress(&uncached_docs, EMBED_BATCH_SIZE, &mut on_progress)?;
-            for (orig_idx, vec) in uncached_indices.into_iter().zip(fresh_vecs) {
-                cache.insert(doc_hashes[orig_idx], vec.clone());
-                vectors[orig_idx] = vec;
-            }
-            if let Some(path) = &cache_path {
-                write_embedding_cache(path, &cache);
-            }
-        }
-
-        let points: Vec<EmbeddingPoint> = vectors.into_iter().map(EmbeddingPoint).collect();
-        let values: Vec<usize> = (0..points.len()).collect();
-        let hnsw = HnswBuilder::default().build(points, values);
-
-        Ok(Self {
-            embedder,
-            hnsw,
-            model_label: resolved.label.clone(),
-            device_label,
-        })
-    }
-
-    /// Returns `(doc_idx, cosine_similarity)` pairs ordered highest similarity first.
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<(usize, f32)>, EmbedError> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-
-        let q_vec = self.embedder.embed_query(query)?;
-        let q_point = EmbeddingPoint(q_vec);
-        let mut search = Search::default();
-        let results = self.hnsw.search(&q_point, &mut search);
-
-        Ok(results
-            .take(limit)
-            .map(|item| (*item.value, (1.0 - item.distance).clamp(-1.0, 1.0)))
-            .collect())
-    }
 }
