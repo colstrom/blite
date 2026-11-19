@@ -177,9 +177,9 @@ impl RepoIndex {
 
         for doc in &docs {
             if let Some(parsed) = &doc.parsed_yaml {
-                kinds.insert(parsed.metadata.kind.as_str().to_string());
+                kinds.insert(parsed.metadata.kind.to_string());
                 if let Some(ns) = &parsed.metadata.namespace {
-                    namespaces.insert(ns.as_str().to_string());
+                    namespaces.insert(ns.to_string());
                 }
                 for label in &parsed.metadata.labels {
                     if let Some((key, _)) = label.split_once('=') {

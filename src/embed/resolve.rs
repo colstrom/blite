@@ -160,12 +160,12 @@ pub fn resolve_active_model(config: &AppConfig, opts: &ModelResolveOptions) -> R
     };
 
     let hf_consented = opts.allow_hf_cache_override || config.allow_hf_cache;
-    if let Some(spec) = find_model_spec(model_id.as_str()) {
+    if let Some(spec) = find_model_spec(model_id) {
         return Ok(locate_curated_model(spec, hf_consented).map(|src| src.into_resolved(spec)));
     }
 
     if let Ok(models_root) = AppConfig::models_dir()
-        && let Ok(local_dir) = ValidatedModelDir::try_from(models_root.join(model_id.as_str()))
+        && let Ok(local_dir) = ValidatedModelDir::try_from(models_root.join(model_id.as_ref()))
     {
         return Ok(Some(ResolvedModel {
             label: model_id.to_string(),

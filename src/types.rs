@@ -1,50 +1,83 @@
 // src/types.rs
 
+use std::ops::Deref;
+
+use camino::Utf8Path;
 use camino::Utf8PathBuf;
 use nutype::nutype;
 use serde::Deserialize;
 use serde::Serialize;
 
+macro_rules! impl_str_deref {
+    ($ty:ty) => {
+        impl Deref for $ty {
+            type Target = str;
+
+            fn deref(&self) -> &Self::Target {
+                self.as_ref()
+            }
+        }
+    };
+}
+
 /// A validated, non-empty search query string.
 #[nutype(
     sanitize(trim),
     validate(not_empty),
-    derive(Debug, Clone, PartialEq, Eq, AsRef, Deref, Display, FromStr, TryFrom, Serialize, Deserialize)
+    derive(Debug, Clone, PartialEq, Eq, AsRef, Display, FromStr, TryFrom, Serialize, Deserialize)
 )]
 pub struct SearchQuery(String);
+
+impl_str_deref!(SearchQuery);
 
 /// A validated, non-empty embedding model identifier.
 #[nutype(
     sanitize(trim),
     validate(not_empty),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, TryFrom, Serialize, Deserialize)
 )]
 pub struct ModelId(String);
 
+impl_str_deref!(ModelId);
+
 /// A UTF-8 path normalized relative to the indexed repository root.
-#[nutype(derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, From, Serialize, Deserialize))]
+#[nutype(derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, From, Serialize, Deserialize))]
 pub struct RepoRelativePath(Utf8PathBuf);
+
+impl Deref for RepoRelativePath {
+    type Target = Utf8Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
 
 #[nutype(
     sanitize(trim),
     validate(not_empty),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, TryFrom, Serialize, Deserialize)
 )]
 pub struct K8sKind(String);
 
-#[nutype(
-    sanitize(trim),
-    validate(not_empty),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
-)]
-pub struct K8sName(String);
+impl_str_deref!(K8sKind);
 
 #[nutype(
     sanitize(trim),
     validate(not_empty),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, TryFrom, Serialize, Deserialize)
+)]
+pub struct K8sName(String);
+
+impl_str_deref!(K8sName);
+
+#[nutype(
+    sanitize(trim),
+    validate(not_empty),
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, TryFrom, Serialize, Deserialize)
 )]
 pub struct K8sNamespace(String);
+
+impl_str_deref!(K8sNamespace);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct K8sMetadata {
@@ -85,9 +118,11 @@ pub struct ResolvedVar {
 #[nutype(
     sanitize(trim),
     validate(not_empty),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, TryFrom, Serialize, Deserialize)
 )]
 pub struct SymbolName(String);
+
+impl_str_deref!(SymbolName);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineRange {
@@ -119,9 +154,11 @@ pub struct DriftReport {
 #[nutype(
     sanitize(trim),
     validate(not_empty),
-    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Deref, Display, TryFrom, Serialize, Deserialize)
+    derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Display, TryFrom, Serialize, Deserialize)
 )]
 pub struct CommitOid(String);
+
+impl_str_deref!(CommitOid);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitHit {

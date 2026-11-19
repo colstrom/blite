@@ -21,8 +21,8 @@ pub struct SubstitutionTable {
 
 impl SubstitutionTable {
     pub fn insert_configmap(&mut self, path: &Utf8Path, meta: &K8sMetadata, data: BTreeMap<String, String>) {
-        let ns = meta.namespace.as_ref().map(|s| s.as_str());
-        let name = meta.name.as_ref().map(|s| s.as_str());
+        let ns = meta.namespace.as_deref();
+        let name = meta.name.as_deref();
 
         let is_flux_substitutions = (ns == Some("flux-system") && name == Some("substitutions"))
             || path.ends_with("flux-system/resources/ConfigMap/substitutions.yaml");

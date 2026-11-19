@@ -165,7 +165,7 @@ pub fn parse_k8s_yaml(path: &Utf8Path, content: &str) -> Option<ParsedYaml> {
         None => (None, None, Vec::new(), Vec::new()),
     };
 
-    let configmap_data = if kind.as_str() == "ConfigMap" {
+    let configmap_data = if kind.as_ref() == "ConfigMap" {
         let merged: BTreeMap<String, String> = raw
             .data
             .into_iter()

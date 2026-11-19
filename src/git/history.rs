@@ -53,7 +53,7 @@ impl GitHistoryIndex {
 
         for commit in commits {
             let mut doc = TantivyDocument::new();
-            doc.add_text(oid_field, commit.oid.as_str());
+            doc.add_text(oid_field, commit.oid);
             doc.add_text(author_field, &commit.author);
             doc.add_i64(timestamp_field, commit.timestamp);
             doc.add_text(message_field, &commit.message);

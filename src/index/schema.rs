@@ -74,12 +74,12 @@ impl IndexSchema {
 
         if let Some(parsed) = &item.parsed_yaml {
             let k8s = &parsed.metadata;
-            document.add_text(self.kind, k8s.kind.as_str());
+            document.add_text(self.kind, &k8s.kind);
             if let Some(name) = &k8s.name {
-                document.add_text(self.name, name.as_str());
+                document.add_text(self.name, name);
             }
             if let Some(ns) = &k8s.namespace {
-                document.add_text(self.ns, ns.as_str());
+                document.add_text(self.ns, ns);
             }
             for label in &k8s.labels {
                 document.add_text(self.labels, label);
@@ -96,7 +96,7 @@ impl IndexSchema {
         }
 
         if let Some(symbol) = &item.symbol {
-            document.add_text(self.symbol, symbol.as_str());
+            document.add_text(self.symbol, symbol);
         }
 
         if let Some(lines) = item.lines {

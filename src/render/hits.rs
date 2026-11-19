@@ -35,7 +35,7 @@ pub(super) fn render_search_hits(
 
         let badge = match (&hit.k8s, &hit.symbol) {
             (Some(k8s), _) => {
-                let name = k8s.name.as_ref().map_or("<unnamed>", |n| n.as_str());
+                let name = k8s.name.as_deref().unwrap_or("<unnamed>");
                 match &k8s.namespace {
                     Some(ns) => format!(" \x1b[1;33m[{}/{name} @ {ns}]\x1b[0m", k8s.kind),
                     None => format!(" \x1b[1;33m[{}/{name}]\x1b[0m", k8s.kind),
