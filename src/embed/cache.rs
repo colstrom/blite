@@ -160,3 +160,127 @@ pub fn write_embedding_cache(path: &Utf8Path, entries: &HashMap<u64, Vec<f32>>) 
         debug!(path = %path, error = %err, "failed to write embedding cache");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use camino::Utf8Path;
+    use camino::Utf8PathBuf;
+
+    use super::CACHE_MAGIC;
+    use super::CACHE_VERSION;
+    use super::PruneFileStats;
+    use super::prune_embedding_cache_file;
+    use super::read_embedding_cache;
+    use super::write_embedding_cache;
+
+    static TEST_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempDir(Utf8PathBuf);
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let id = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dir = Utf8PathBuf::try_from(std::env::temp_dir())
+                .expect("UTF-8 temp dir")
+                .join(format!("blite-test-{label}-{}-{id}", std::process::id()));
+            let _ = fs_err::remove_dir_all(&dir);
+            fs_err::create_dir_all(&dir).expect("create temp test dir");
+            Self(dir)
+        }
+
+        fn path(&self) -> &Utf8Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs_err::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn round_trips_embeddings_through_binary_cache() {
+        let tmp = TempDir::new("roundtrip");
+        let cache_file = tmp.path().join("test-model.bin");
+
+        let mut entries = HashMap::new();
+        entries.insert(0x1111_2222_3333_4444, vec![0.25, -0.5, 0.75, 1.0]);
+        entries.insert(0xdead_beef_cafe_babe, vec![-1.0, 0.0, 0.5, 0.125]);
+
+        write_embedding_cache(&cache_file, &entries);
+        let loaded = read_embedding_cache(&cache_file);
+
+        assert_eq!(loaded, entries);
+    }
+
+    #[test]
+    fn rejects_corrupt_headers_and_ignores_truncated_tail() {
+        let tmp = TempDir::new("corrupt");
+        let cache_file = tmp.path().join("corrupt.bin");
+
+        // Bad magic header
+        fs_err::write(&cache_file, b"BADMAGIC\x01\x00\x00\x00\x02\x00\x00\x00").unwrap();
+        assert!(read_embedding_cache(&cache_file).is_empty());
+
+        // Unsupported version
+        let mut wrong_ver = Vec::new();
+        wrong_ver.extend_from_slice(CACHE_MAGIC);
+        wrong_ver.extend_from_slice(&(CACHE_VERSION + 1).to_le_bytes());
+        wrong_ver.extend_from_slice(&2u32.to_le_bytes());
+        fs_err::write(&cache_file, &wrong_ver).unwrap();
+        assert!(read_embedding_cache(&cache_file).is_empty());
+
+        // Valid record followed by incomplete trailing bytes
+        let mut entries = HashMap::new();
+        entries.insert(42, vec![1.0, 2.0]);
+        write_embedding_cache(&cache_file, &entries);
+
+        let mut raw = fs_err::read(&cache_file).unwrap();
+        raw.extend_from_slice(&[0xff, 0xaa, 0x55]);
+        fs_err::write(&cache_file, &raw).unwrap();
+
+        let loaded = read_embedding_cache(&cache_file);
+        assert_eq!(loaded, entries);
+    }
+
+    #[test]
+    fn prunes_stale_entries_and_removes_empty_cache_file() {
+        let tmp = TempDir::new("prune");
+        let cache_file = tmp.path().join("prune.bin");
+
+        let mut entries = HashMap::new();
+        entries.insert(10, vec![0.1, 0.2]);
+        entries.insert(20, vec![0.3, 0.4]);
+        entries.insert(30, vec![0.5, 0.6]);
+        write_embedding_cache(&cache_file, &entries);
+
+        // Keep only hash 20 -> removes 2 entries, keeps file on disk
+        let stats = prune_embedding_cache_file(&cache_file, &HashSet::from([20]));
+        assert_eq!(
+            stats,
+            PruneFileStats {
+                removed_entries: 2,
+                removed_file: false,
+            }
+        );
+        assert!(cache_file.exists());
+        assert_eq!(read_embedding_cache(&cache_file), HashMap::from([(20, vec![0.3, 0.4])]));
+
+        // Keep nothing -> removes last entry and deletes the file
+        let final_stats = prune_embedding_cache_file(&cache_file, &HashSet::new());
+        assert_eq!(
+            final_stats,
+            PruneFileStats {
+                removed_entries: 1,
+                removed_file: true,
+            }
+        );
+        assert!(!cache_file.exists());
+    }
+}
