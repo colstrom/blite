@@ -14,6 +14,7 @@ use camino::Utf8PathBuf;
 use fusion::has_field_filter;
 use fusion::rrf_fuse;
 pub use ingest::EmbeddableDoc;
+use ingest::IndexDocument;
 pub use ingest::collect_embeddable_docs;
 use ingest::collect_repo_documents;
 use ingest::format_doc_for_embedding;
@@ -133,6 +134,14 @@ pub struct RepoIndex {
     annotations: Vec<String>,
 }
 
+struct ExtractedMetadata {
+    substitutions: SubstitutionTable,
+    kinds: Vec<String>,
+    namespaces: Vec<String>,
+    labels: Vec<String>,
+    annotations: Vec<String>,
+}
+
 impl RepoIndex {
     pub fn build_from_dir(root: impl AsRef<Utf8Path>) -> Result<Self, IndexError> {
         Self::build_with_options(root, &IndexBuildOptions::default())
@@ -144,99 +153,43 @@ impl RepoIndex {
         let docs = collect_repo_documents(root, opts.include_vendor, opts.include_untracked)?;
 
         // Resolve optional semantic model up front so `SemanticMode::Require` fails fast before indexing
-        let resolved_model = match opts.semantic_mode {
-            SemanticMode::Off => None,
-            SemanticMode::Auto => {
-                let cfg = AppConfig::load()?;
-                resolve_active_model(
-                    &cfg,
-                    &ModelResolveOptions {
-                        override_model_dir: opts.model_dir.clone(),
-                        allow_hf_cache_override: opts.allow_hf_cache,
-                    },
-                )?
-            }
-            SemanticMode::Require => {
-                let cfg = AppConfig::load()?;
-                let found = resolve_active_model(
-                    &cfg,
-                    &ModelResolveOptions {
-                        override_model_dir: opts.model_dir.clone(),
-                        allow_hf_cache_override: opts.allow_hf_cache,
-                    },
+        let resolved_model = resolve_semantic_model(opts)?;
+        let metadata = extract_k8s_metadata(&docs);
+
+        let semantic = match &resolved_model {
+            Some(model) => {
+                let embed_docs: Vec<(String, String)> =
+                    docs.iter().map(|d| (d.rel_path.to_string(), format_doc_for_embedding(d))).collect();
+                let built = SemanticIndex::build_with_progress(
+                    model,
+                    &embed_docs,
+                    !opts.no_cache,
+                    stderr_embed_progress(Instant::now(), opts.show_progress),
                 )?;
-                Some(found.ok_or(EmbedError::ModelUnavailable)?)
+                Some(built)
             }
-        };
-
-        let mut substitutions = SubstitutionTable::default();
-        let mut kinds = BTreeSet::new();
-        let mut namespaces = BTreeSet::new();
-        let mut labels = BTreeSet::new();
-        let mut annotations = BTreeSet::new();
-
-        for doc in &docs {
-            if let Some(parsed) = &doc.parsed_yaml {
-                kinds.insert(parsed.metadata.kind.to_string());
-                if let Some(ns) = &parsed.metadata.namespace {
-                    namespaces.insert(ns.to_string());
-                }
-                for label in &parsed.metadata.labels {
-                    if let Some((key, _)) = label.split_once('=') {
-                        labels.insert(key.to_string());
-                    }
-                    labels.insert(label.clone());
-                }
-                for annotation in &parsed.metadata.annotations {
-                    if let Some((key, _)) = annotation.split_once('=') {
-                        annotations.insert(key.to_string());
-                    }
-                    annotations.insert(annotation.clone());
-                }
-                if let Some(data) = &parsed.configmap_data {
-                    substitutions.insert_configmap(&doc.rel_path, &parsed.metadata, data.clone());
-                }
-            }
-        }
-
-        let semantic = if let Some(model) = &resolved_model {
-            let embed_docs: Vec<(String, String)> = docs.iter().map(|d| (d.rel_path.to_string(), format_doc_for_embedding(d))).collect();
-            let built = SemanticIndex::build_with_progress(
-                model,
-                &embed_docs,
-                !opts.no_cache,
-                stderr_embed_progress(Instant::now(), opts.show_progress),
-            )?;
-            Some(built)
-        } else {
-            None
+            None => None,
         };
 
         debug!(
             document_count = docs.len(),
-            flux_substitutions = substitutions.flux_var_count(),
+            flux_substitutions = metadata.substitutions.flux_var_count(),
             semantic_enabled = semantic.is_some(),
             "collected and parsed repository documents"
         );
 
         let (schema, fields) = IndexSchema::build();
-        let index = Index::create_in_ram(schema);
-        let mut writer = index.writer(15_000_000)?;
-
-        for (doc_id, item) in docs.into_iter().enumerate() {
-            writer.add_document(fields.to_tantivy_doc(doc_id as u64, &item))?;
-        }
-        writer.commit()?;
+        let index = build_tantivy_index(docs, schema, &fields)?;
 
         Ok(Self {
             index,
             fields,
-            substitutions,
+            substitutions: metadata.substitutions,
             semantic,
-            kinds: kinds.into_iter().collect(),
-            namespaces: namespaces.into_iter().collect(),
-            labels: labels.into_iter().collect(),
-            annotations: annotations.into_iter().collect(),
+            kinds: metadata.kinds,
+            namespaces: metadata.namespaces,
+            labels: metadata.labels,
+            annotations: metadata.annotations,
         })
     }
 
@@ -323,4 +276,72 @@ impl RepoIndex {
     pub fn active_semantic_info(&self) -> Option<(&str, &'static str)> {
         self.semantic.as_ref().map(|s| (s.model_label.as_str(), s.device_label))
     }
+}
+
+fn resolve_semantic_model(opts: &IndexBuildOptions) -> Result<Option<crate::embed::ResolvedModel>, IndexError> {
+    if opts.semantic_mode == SemanticMode::Off {
+        return Ok(None);
+    }
+
+    let cfg = AppConfig::load()?;
+    let found = resolve_active_model(
+        &cfg,
+        &ModelResolveOptions {
+            override_model_dir: opts.model_dir.clone(),
+            allow_hf_cache_override: opts.allow_hf_cache,
+        },
+    )?;
+
+    match opts.semantic_mode {
+        SemanticMode::Off => unreachable!(),
+        SemanticMode::Auto => Ok(found),
+        SemanticMode::Require => Ok(Some(found.ok_or(EmbedError::ModelUnavailable)?)),
+    }
+}
+
+fn extract_k8s_metadata(docs: &[IndexDocument]) -> ExtractedMetadata {
+    let mut substitutions = SubstitutionTable::default();
+    let mut kinds = BTreeSet::new();
+    let mut namespaces = BTreeSet::new();
+    let mut labels = BTreeSet::new();
+    let mut annotations = BTreeSet::new();
+
+    for doc in docs {
+        let Some(parsed) = &doc.parsed_yaml else {
+            continue;
+        };
+
+        kinds.insert(parsed.metadata.kind.to_string());
+        if let Some(ns) = &parsed.metadata.namespace {
+            namespaces.insert(ns.to_string());
+        }
+        labels.extend(parsed.metadata.label_keys().map(ToString::to_string));
+        labels.extend(parsed.metadata.labels.iter().cloned());
+        annotations.extend(parsed.metadata.annotation_keys().map(ToString::to_string));
+        annotations.extend(parsed.metadata.annotations.iter().cloned());
+
+        if let Some(data) = &parsed.configmap_data {
+            substitutions.insert_configmap(&doc.rel_path, &parsed.metadata, data.clone());
+        }
+    }
+
+    ExtractedMetadata {
+        substitutions,
+        kinds: kinds.into_iter().collect(),
+        namespaces: namespaces.into_iter().collect(),
+        labels: labels.into_iter().collect(),
+        annotations: annotations.into_iter().collect(),
+    }
+}
+
+fn build_tantivy_index(docs: Vec<IndexDocument>, schema: tantivy::schema::Schema, fields: &IndexSchema) -> Result<Index, IndexError> {
+    let index = Index::create_in_ram(schema);
+    let mut writer = index.writer(15_000_000)?;
+
+    for (doc_id, item) in docs.into_iter().enumerate() {
+        writer.add_document(fields.to_tantivy_doc(doc_id as u64, &item))?;
+    }
+    writer.commit()?;
+
+    Ok(index)
 }

@@ -83,15 +83,15 @@ impl IndexSchema {
             }
             for label in &k8s.labels {
                 document.add_text(self.labels, label);
-                if let Some((key, _)) = label.split_once('=') {
-                    document.add_text(self.labels, key);
-                }
+            }
+            for key in k8s.label_keys() {
+                document.add_text(self.labels, key);
             }
             for annotation in &k8s.annotations {
                 document.add_text(self.annotations, annotation);
-                if let Some((key, _)) = annotation.split_once('=') {
-                    document.add_text(self.annotations, key);
-                }
+            }
+            for key in k8s.annotation_keys() {
+                document.add_text(self.annotations, key);
             }
         }
 
@@ -139,17 +139,17 @@ impl IndexSchema {
 
     fn extract_k8s(&self, doc: &TantivyDocument) -> Option<K8sMetadata> {
         let kind_str = doc.get_first(self.kind).and_then(|v| v.as_str())?;
-        let kind = K8sKind::try_from(kind_str.to_string()).ok()?;
+        let kind = K8sKind::try_from(kind_str).ok()?;
 
         let name = doc
             .get_first(self.name)
             .and_then(|v| v.as_str())
-            .and_then(|s| K8sName::try_from(s.to_string()).ok());
+            .and_then(|s| K8sName::try_from(s).ok());
 
         let namespace = doc
             .get_first(self.ns)
             .and_then(|v| v.as_str())
-            .and_then(|s| K8sNamespace::try_from(s.to_string()).ok());
+            .and_then(|s| K8sNamespace::try_from(s).ok());
 
         let labels = doc
             .get_all(self.labels)

@@ -90,6 +90,16 @@ pub struct K8sMetadata {
     pub annotations: Vec<String>,
 }
 
+impl K8sMetadata {
+    pub fn label_keys(&self) -> impl Iterator<Item = &str> {
+        self.labels.iter().filter_map(|entry| entry.split_once('=').map(|(k, _)| k))
+    }
+
+    pub fn annotation_keys(&self) -> impl Iterator<Item = &str> {
+        self.annotations.iter().filter_map(|entry| entry.split_once('=').map(|(k, _)| k))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VarResolutionSource {
