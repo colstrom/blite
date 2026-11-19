@@ -8,20 +8,13 @@ use tracing::debug;
 
 use super::Embedder;
 use super::truncate_for_tokenizer;
+use crate::hash::fnv1a_64_parts;
 
 const CACHE_MAGIC: &[u8; 8] = b"BLITEEMB";
 const CACHE_VERSION: u32 = 1;
 
 pub(super) fn hash_embed_text(prefix: &str, text: &str) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-
-    let mut hash = OFFSET_BASIS;
-    for byte in prefix.as_bytes().iter().chain(b"\0").chain(text.as_bytes()) {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    fnv1a_64_parts([prefix.as_bytes(), b"\0", text.as_bytes()])
 }
 
 pub fn embedding_cache_dir() -> Option<Utf8PathBuf> {

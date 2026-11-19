@@ -7,6 +7,7 @@ pub mod drift;
 pub mod embed;
 pub mod error;
 pub mod git;
+pub(crate) mod hash;
 pub mod index;
 pub mod k8s;
 pub mod render;

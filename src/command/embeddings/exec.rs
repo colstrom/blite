@@ -21,6 +21,7 @@ use crate::embed::find_model_spec;
 use crate::embed::hash_doc_with_prefix;
 use crate::embed::read_embedding_cache;
 use crate::embed::resolve_model_target;
+use crate::embed::stderr_embed_progress;
 use crate::embed::write_embedding_cache;
 use crate::index::collect_documents_for_diagnostics;
 
@@ -65,13 +66,7 @@ pub(super) fn execute_build(args: &EmbeddingsBuildArgs) -> Result<EmbeddingsPayl
 
     let newly_computed = uncached_docs.len();
     if !uncached_docs.is_empty() {
-        let fresh = embedder.embed_documents_with_progress(&uncached_docs, EMBED_BATCH_SIZE, |done, total, path| {
-            if done < total {
-                eprint!("\r\x1b[2KEmbedding [{done}/{total}] ({:.1?}) {path}", start.elapsed());
-            } else {
-                eprint!("\r\x1b[2K");
-            }
-        })?;
+        let fresh = embedder.embed_documents_with_progress(&uncached_docs, EMBED_BATCH_SIZE, stderr_embed_progress(start, true))?;
         for (hash, vec) in uncached_hashes.into_iter().zip(fresh) {
             cache.insert(hash, vec);
         }

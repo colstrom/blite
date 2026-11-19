@@ -8,6 +8,7 @@ use tracing::debug;
 
 use super::helper::ReplHelper;
 use crate::command::args::ReplHistoryArgs;
+use crate::hash::fnv1a_64;
 
 #[derive(Debug, Clone)]
 pub(super) enum HistoryTarget {
@@ -37,7 +38,7 @@ impl HistoryTarget {
             Self::Global => default_state_dir().map(|dir| dir.join("history")),
             Self::RepoScoped(repo) => {
                 let canonical = repo.canonicalize_utf8().unwrap_or_else(|_| repo.clone());
-                let key = hash_repo_path(&canonical);
+                let key = fnv1a_64(canonical.as_str().as_bytes());
                 default_state_dir().map(|dir| dir.join(format!("history-{key:016x}")))
             }
         }
@@ -68,17 +69,4 @@ pub(super) fn save_history(rl: &mut Editor<ReplHelper, DefaultHistory>, path: &U
 fn default_state_dir() -> Option<Utf8PathBuf> {
     let base = dirs::state_dir().or_else(dirs::data_local_dir)?;
     Utf8PathBuf::try_from(base).ok().map(|dir| dir.join("blite"))
-}
-
-fn hash_repo_path(path: &Utf8Path) -> u64 {
-    // 64-bit FNV-1a for deterministic cross-run filenames without extra dependencies
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-
-    let mut hash = OFFSET_BASIS;
-    for byte in path.as_str().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
 }

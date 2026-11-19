@@ -7,6 +7,8 @@ mod error;
 mod hnsw;
 mod resolve;
 
+use std::time::Instant;
+
 pub use cache::compute_doc_embed_hash;
 pub use cache::embedding_cache_dir;
 pub use cache::embedding_cache_path;
@@ -45,6 +47,21 @@ use tracing::instrument;
 pub const EMBED_BATCH_SIZE: usize = 64;
 #[cfg(not(target_os = "macos"))]
 pub const EMBED_BATCH_SIZE: usize = 32;
+
+/// Returns a progress callback that renders an in-place status line to `stderr`
+/// when `enabled` is true, and clears the line once `done == total`.
+pub fn stderr_embed_progress(start: Instant, enabled: bool) -> impl FnMut(usize, usize, &str) {
+    move |done, total, path| {
+        if !enabled {
+            return;
+        }
+        if done < total {
+            eprint!("\r\x1b[2KEmbedding [{done}/{total}] ({:.1?}) {path}", start.elapsed());
+        } else {
+            eprint!("\r\x1b[2K");
+        }
+    }
+}
 
 pub(super) fn truncate_for_tokenizer(text: &str, max_tokens: usize) -> &str {
     let byte_budget = max_tokens.saturating_mul(6);

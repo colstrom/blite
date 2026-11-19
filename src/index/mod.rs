@@ -41,6 +41,7 @@ use crate::embed::EmbedError;
 use crate::embed::ModelResolveOptions;
 use crate::embed::SemanticIndex;
 use crate::embed::resolve_active_model;
+use crate::embed::stderr_embed_progress;
 use crate::k8s::SubstitutionTable;
 use crate::types::DriftReport;
 use crate::types::FileCommit;
@@ -200,18 +201,12 @@ impl RepoIndex {
 
         let semantic = if let Some(model) = &resolved_model {
             let embed_docs: Vec<(String, String)> = docs.iter().map(|d| (d.rel_path.to_string(), format_doc_for_embedding(d))).collect();
-            let start_embed = Instant::now();
-            let show_progress = opts.show_progress;
-            let built = SemanticIndex::build_with_progress(model, &embed_docs, !opts.no_cache, |done, total, path| {
-                if !show_progress {
-                    return;
-                }
-                if done < total {
-                    eprint!("\r\x1b[2KEmbedding [{done}/{total}] ({:.1?}) {path}", start_embed.elapsed());
-                } else {
-                    eprint!("\r\x1b[2K");
-                }
-            })?;
+            let built = SemanticIndex::build_with_progress(
+                model,
+                &embed_docs,
+                !opts.no_cache,
+                stderr_embed_progress(Instant::now(), opts.show_progress),
+            )?;
             Some(built)
         } else {
             None
