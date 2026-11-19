@@ -88,48 +88,23 @@ impl SubstitutionTable {
                 })
             });
 
-        let is_set = lookup.is_some();
-        let is_non_empty = lookup.as_ref().is_some_and(|(v, _)| !v.is_empty());
+        let (value, source) = match (op, operand, lookup) {
+            (Some(":+"), Some(alt), Some((val, source))) if !val.is_empty() => (Some(alt.to_string()), source),
+            (Some("+"), Some(alt), Some((_, source))) => (Some(alt.to_string()), source),
+            (Some(":-" | ":="), Some(default_val), None) => (Some(default_val.to_string()), VarResolutionSource::InlineDefault),
+            (Some(":-" | ":="), Some(default_val), Some((val, _))) if val.is_empty() => {
+                (Some(default_val.to_string()), VarResolutionSource::InlineDefault)
+            }
+            (Some("-" | "="), Some(default_val), None) => (Some(default_val.to_string()), VarResolutionSource::InlineDefault),
+            (_, _, Some((val, source))) => (Some(val.to_string()), source),
+            (_, _, None) => (None, VarResolutionSource::Unresolved),
+        };
 
-        match (op, operand) {
-            (Some(":+"), Some(alt)) if is_non_empty => ResolvedVar {
-                expression: expression.to_string(),
-                name: name.to_string(),
-                value: Some(alt.to_string()),
-                source: lookup.unwrap().1,
-            },
-            (Some("+"), Some(alt)) if is_set => ResolvedVar {
-                expression: expression.to_string(),
-                name: name.to_string(),
-                value: Some(alt.to_string()),
-                source: lookup.unwrap().1,
-            },
-            (Some(":-" | ":="), Some(default_val)) if !is_non_empty => ResolvedVar {
-                expression: expression.to_string(),
-                name: name.to_string(),
-                value: Some(default_val.to_string()),
-                source: VarResolutionSource::InlineDefault,
-            },
-            (Some("-" | "="), Some(default_val)) if !is_set => ResolvedVar {
-                expression: expression.to_string(),
-                name: name.to_string(),
-                value: Some(default_val.to_string()),
-                source: VarResolutionSource::InlineDefault,
-            },
-            _ => match lookup {
-                Some((val, source)) => ResolvedVar {
-                    expression: expression.to_string(),
-                    name: name.to_string(),
-                    value: Some(val.to_string()),
-                    source,
-                },
-                None => ResolvedVar {
-                    expression: expression.to_string(),
-                    name: name.to_string(),
-                    value: None,
-                    source: VarResolutionSource::Unresolved,
-                },
-            },
+        ResolvedVar {
+            expression: expression.to_string(),
+            name: name.to_string(),
+            value,
+            source,
         }
     }
 }

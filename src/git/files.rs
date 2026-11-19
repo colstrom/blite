@@ -9,7 +9,7 @@ use gix::bstr::ByteSlice;
 use jiff::Timestamp;
 use tracing::instrument;
 
-use super::compute_repo_prefix;
+use super::discover_repo;
 use super::normalize_repo_path;
 use super::walk_repo_commits;
 use crate::types::FileCommit;
@@ -62,10 +62,8 @@ impl FileCommitHistory {
 /// Returns the set of `RepoRelativePath` entries currently tracked in the Git index
 /// under `root`, or `None` if `root` is not inside a Git repository or has no index yet.
 pub fn collect_tracked_paths(root: impl AsRef<Utf8Path>) -> Option<HashSet<RepoRelativePath>> {
-    let root = root.as_ref();
-    let repo = gix::discover(root.as_std_path()).ok()?;
+    let (repo, repo_prefix) = discover_repo(root.as_ref(), true).ok()?;
     let index = repo.index().ok()?;
-    let repo_prefix = compute_repo_prefix(&repo, root);
 
     let mut tracked = HashSet::with_capacity(index.entries().len());
     for entry in index.entries() {

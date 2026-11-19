@@ -23,6 +23,7 @@ use repl::ReplCommand;
 use repl::ReplError;
 use search::SearchCommand;
 use search::SearchError;
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::render::RenderError;
@@ -114,32 +115,13 @@ impl Command {
     fn execute(self) -> Result<CommandOutput, CommandError> {
         let json = self.json;
         match self.subcommand {
-            Some(Subcommand::Search(cmd)) => {
-                if json {
-                    Ok(CommandOutput::Json(cmd.run()?))
-                } else {
-                    let payload = cmd.execute()?;
-                    let rendered = TerminalRenderer::new().render_hits(payload.query.as_ref(), &payload.hits)?;
-                    Ok(CommandOutput::Text(rendered))
-                }
-            }
-            Some(Subcommand::History(cmd)) => {
-                if json {
-                    Ok(CommandOutput::Json(cmd.run()?))
-                } else {
-                    let payload = cmd.execute()?;
-                    let rendered = TerminalRenderer::new().render_commit_hits(payload.query.as_ref(), &payload.hits);
-                    Ok(CommandOutput::Text(rendered))
-                }
-            }
-            Some(Subcommand::Models(cmd)) => {
-                if json {
-                    Ok(CommandOutput::Json(cmd.run()?))
-                } else {
-                    let payload = cmd.execute()?;
-                    Ok(CommandOutput::Text(render_models_table(&payload)))
-                }
-            }
+            Some(Subcommand::Search(cmd)) => render_or_json(json, cmd.execute(), |payload| {
+                Ok(TerminalRenderer::new().render_hits(payload.query.as_ref(), &payload.hits)?)
+            }),
+            Some(Subcommand::History(cmd)) => render_or_json(json, cmd.execute(), |payload| {
+                Ok(TerminalRenderer::new().render_commit_hits(payload.query.as_ref(), &payload.hits))
+            }),
+            Some(Subcommand::Models(cmd)) => render_or_json(json, cmd.execute(), |payload| Ok(render_models_table(&payload))),
             Some(Subcommand::Embeddings(cmd)) => {
                 let value = cmd.run()?;
                 if json {
@@ -148,14 +130,7 @@ impl Command {
                     Ok(CommandOutput::Silent)
                 }
             }
-            Some(Subcommand::Diagnostics(cmd)) => {
-                if json {
-                    Ok(CommandOutput::Json(cmd.run()?))
-                } else {
-                    let payload = cmd.execute()?;
-                    Ok(CommandOutput::Text(render_diagnostics(&payload)))
-                }
-            }
+            Some(Subcommand::Diagnostics(cmd)) => render_or_json(json, cmd.execute(), |payload| Ok(render_diagnostics(&payload))),
             Some(Subcommand::Repl(cmd)) => {
                 cmd.run()?;
                 Ok(CommandOutput::Silent)
@@ -165,5 +140,19 @@ impl Command {
                 Ok(CommandOutput::Silent)
             }
         }
+    }
+}
+
+fn render_or_json<T, E, F>(json: bool, payload: Result<T, E>, render: F) -> Result<CommandOutput, CommandError>
+where
+    T: Serialize,
+    E: Into<CommandError>,
+    F: FnOnce(T) -> Result<String, CommandError>,
+{
+    let payload = payload.map_err(Into::into)?;
+    if json {
+        Ok(CommandOutput::Json(serde_json::to_value(payload)?))
+    } else {
+        Ok(CommandOutput::Text(render(payload)?))
     }
 }

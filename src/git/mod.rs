@@ -50,7 +50,16 @@ pub(super) struct WalkedCommit {
     pub touched_paths: Vec<RepoRelativePath>,
 }
 
-pub(super) fn compute_repo_prefix(repo: &gix::Repository, root: &Utf8Path) -> Option<Utf8PathBuf> {
+pub(super) fn discover_repo(root: &Utf8Path, normalize_prefix: bool) -> Result<(gix::Repository, Option<Utf8PathBuf>), GitHistoryError> {
+    let repo = gix::discover(root.as_std_path()).map_err(|source| GitHistoryError::Discover {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let repo_prefix = if normalize_prefix { compute_repo_prefix(&repo, root) } else { None };
+    Ok((repo, repo_prefix))
+}
+
+fn compute_repo_prefix(repo: &gix::Repository, root: &Utf8Path) -> Option<Utf8PathBuf> {
     repo.workdir()
         .and_then(Utf8Path::from_path)
         .and_then(|wd| {
@@ -72,17 +81,13 @@ pub(super) fn normalize_repo_path(path: Utf8PathBuf, repo_prefix: Option<&Utf8Pa
 }
 
 pub(super) fn walk_repo_commits(root: &Utf8Path, normalize_prefix: bool) -> Result<Vec<WalkedCommit>, GitHistoryError> {
-    let repo = gix::discover(root.as_std_path()).map_err(|source| GitHistoryError::Discover {
-        path: root.to_path_buf(),
-        source,
-    })?;
+    let (repo, repo_prefix) = discover_repo(root, normalize_prefix)?;
 
     let Ok(head_id) = repo.head_id() else {
         return Ok(Vec::new());
     };
 
     let walk = head_id.ancestors().all().map_err(|e| GitHistoryError::Revision(e.to_string()))?;
-    let repo_prefix = if normalize_prefix { compute_repo_prefix(&repo, root) } else { None };
 
     let mut commits = Vec::new();
     for info in walk {
